@@ -389,7 +389,27 @@ function drawChart(history) {
   const path = data.map((item, i) => `${i ? 'L' : 'M'} ${x(i).toFixed(1)} ${y(Number(item.total)).toFixed(1)}`).join(' ');
   const base = y(min);
   const area = `${path} L ${x(data.length - 1).toFixed(1)} ${base.toFixed(1)} L ${x(0).toFixed(1)} ${base.toFixed(1)} Z`;
-  host.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="總資產每月變化折線圖"><defs><linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#a8dbc8" stop-opacity=".55"/><stop offset="100%" stop-color="#a8dbc8" stop-opacity=".02"/></linearGradient></defs>${gridValues.map(value => `<line class="grid-line" x1="${left}" y1="${y(value)}" x2="${width-right}" y2="${y(value)}"/><text class="grid-label" x="0" y="${y(value)+3}">${value === 0 ? '0' : `${Math.round(value / 10000)}萬`}</text>`).join('')}<path class="chart-area" d="${area}"/><path class="chart-line" d="${path}"/>${data.map((item, i) => `<circle class="chart-point" cx="${x(i)}" cy="${y(Number(item.total))}" r="4"/><text class="month-label" text-anchor="middle" x="${x(i)}" y="${height-9}">${item.month.slice(2).replace('-', '/')}</text>`).join('')}</svg>`;
+  const points = data.map((item, i) => {
+    const pointX = x(i), pointY = y(Number(item.total));
+    const label = `NT$ ${money(item.total)}`;
+    const labelWidth = Math.max(82, Math.min(146, label.length * 7 + 18));
+    const labelY = pointY < 38 ? pointY + 10 : pointY - 32;
+    return `<g class="chart-point-group" tabindex="0" role="button" aria-label="${monthText(item.month)}總資產 ${label}"><circle class="chart-hit" cx="${pointX}" cy="${pointY}" r="14"/><circle class="chart-point" cx="${pointX}" cy="${pointY}" r="4"/><g class="chart-tooltip"><rect x="${pointX - labelWidth / 2}" y="${labelY}" width="${labelWidth}" height="23" rx="6"/><text x="${pointX}" y="${labelY + 15}" text-anchor="middle">${label}</text></g></g><text class="month-label" text-anchor="middle" x="${pointX}" y="${height-9}">${item.month.slice(2).replace('-', '/')}</text>`;
+  }).join('');
+  host.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="總資產每月變化折線圖"><defs><linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#a8dbc8" stop-opacity=".55"/><stop offset="100%" stop-color="#a8dbc8" stop-opacity=".02"/></linearGradient></defs>${gridValues.map(value => `<line class="grid-line" x1="${left}" y1="${y(value)}" x2="${width-right}" y2="${y(value)}"/><text class="grid-label" x="0" y="${y(value)+3}">${value === 0 ? '0' : `${Math.round(value / 10000)}萬`}</text>`).join('')}<path class="chart-area" d="${area}"/><path class="chart-line" d="${path}"/>${points}</svg>`;
+  host.querySelectorAll('.chart-point-group').forEach(point => {
+    point.addEventListener('pointerup', event => {
+      if (event.pointerType !== 'touch') return;
+      host.querySelectorAll('.chart-point-group').forEach(item => item.classList.remove('is-active'));
+      point.classList.add('is-active');
+    });
+    point.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      host.querySelectorAll('.chart-point-group').forEach(item => item.classList.remove('is-active'));
+      point.classList.add('is-active');
+    });
+  });
 }
 
 function bindDashboard() {
@@ -487,7 +507,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=16').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=17').then(registration => registration.update());
 });
 
 async function startApp() {

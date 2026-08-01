@@ -31,3 +31,17 @@ py -m http.server 4173
 ## 資料與帳號
 
 目前版本將帳號與記帳資料保存在**該裝置的瀏覽器本機儲存空間**，因此能滿足個人、單一裝置使用與維持登入，但不會自動同步到其他手機或電腦。若要正式上線並支援跨裝置、安全帳號驗證與備份，下一步應串接 Supabase、Firebase 或自有後端資料庫。
+# 青帳
+
+個人資產與每月收支追蹤 PWA。
+
+## 雲端同步設定
+
+前端使用 Supabase Auth 與 Postgres。建立 Supabase 專案後，請在 SQL Editor 執行 [supabase/schema.sql](supabase/schema.sql)；資料表會以 Row Level Security 限制為登入者僅能讀寫自己的帳本。
+
+在 Supabase Authentication 的 URL Configuration 中，設定：
+
+- Site URL：`https://sevenr8.github.io/qingzhang-app/`
+- Redirect URLs：`https://sevenr8.github.io/qingzhang-app/`
+
+`sb_publishable_...` 公開金鑰可出現在前端；資料庫密碼、`sb_secret_...`、`service_role` 與連線字串不可放入本專案。

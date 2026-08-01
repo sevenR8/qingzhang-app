@@ -1,6 +1,10 @@
+const SUPABASE_URL = 'https://ckaraszxheilemmynemi.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_oXQ75pz8KR1fv_FGyLkzBA_jk-oORDh';
+
 const STORAGE = {
-  users: 'qingzhang_users_v1',
-  session: 'qingzhang_session_v1'
+  legacyUsers: 'qingzhang_users_v1',
+  legacySession: 'qingzhang_session_v1',
+  bookCache: 'qingzhang_book_cache_v2'
 };
 
 const assetMeta = {
@@ -12,20 +16,35 @@ const assetMeta = {
 
 const expenseIcons = ['⌂', '◒', '⌁', '⌁', '◉'];
 const app = document.querySelector('#app');
+const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+});
 let currentModal = null;
 let toastTimer;
 let viewMonth = todayMonth();
+let activeUser = null;
+let cloudSyncTimer;
 
-function getUsers() { return JSON.parse(localStorage.getItem(STORAGE.users) || '{}'); }
-function saveUsers(users) { localStorage.setItem(STORAGE.users, JSON.stringify(users)); }
-function currentEmail() { return localStorage.getItem(STORAGE.session); }
+function getLegacyUsers() {
+  try { return JSON.parse(localStorage.getItem(STORAGE.legacyUsers) || '{}'); }
+  catch { return {}; }
+}
+function cacheKey(userId) { return `${STORAGE.bookCache}:${userId}`; }
+function getCachedBook(userId) {
+  try { return JSON.parse(localStorage.getItem(cacheKey(userId)) || 'null'); }
+  catch { return null; }
+}
+function cacheBook(user) { if (user?.id) localStorage.setItem(cacheKey(user.id), JSON.stringify(user)); }
 function normalizeUser(user) {
   if (!user) return null;
   user.incomes ||= {};
   user.monthlyExpenses ||= [];
+  user.assets ||= emptyAssets();
+  user.expenses ||= [];
+  user.history ||= [];
   return user;
 }
-function getUser() { const email = currentEmail(); return email ? normalizeUser(getUsers()[email]) : null; }
+function getUser() { return normalizeUser(activeUser); }
 function localDateISO() { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function periodMonthForDate(dateString) {
   const [year, month, day] = String(dateString).split('-').map(Number);
@@ -119,15 +138,9 @@ function monthlyChange(user, currentTotal, month = viewMonth) {
 }
 function shiftMonth(month, amount) { const [year, mon] = month.split('-').map(Number); const date = new Date(year, mon - 1 + amount, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
 
-async function hash(text) {
-  const bytes = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function defaultUser(name, email, passwordHash) {
+function defaultUser(name, email) {
   return {
-    name, email, passwordHash,
+    name, email,
     assets: { cash: 0, tw: 0, us: 0, crypto: 0 },
     expenses: [],
     incomes: {},
@@ -138,9 +151,82 @@ function defaultUser(name, email, passwordHash) {
 }
 
 function persistUser(user) {
-  const users = getUsers();
-  users[user.email] = user;
-  saveUsers(users);
+  activeUser = normalizeUser(user);
+  cacheBook(activeUser);
+  window.clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = window.setTimeout(() => syncBookToCloud(), 350);
+}
+
+function bookPayload(user) {
+  return {
+    assets: user.assets,
+    expenses: user.expenses,
+    incomes: user.incomes,
+    monthlyExpenses: user.monthlyExpenses,
+    history: user.history,
+    createdAt: user.createdAt || new Date().toISOString()
+  };
+}
+
+function nameFromAuth(authUser) {
+  return String(authUser.user_metadata?.display_name || authUser.email?.split('@')[0] || '我').slice(0, 30);
+}
+
+function makeUserFromCloud(authUser, row) {
+  const legacy = getLegacyUsers()[authUser.email] || null;
+  const cached = getCachedBook(authUser.id);
+  const source = row?.book || legacy || cached || {};
+  const user = normalizeUser({
+    ...defaultUser(row?.display_name || source.name || nameFromAuth(authUser), authUser.email),
+    ...source,
+    id: authUser.id,
+    email: authUser.email,
+    name: row?.display_name || source.name || nameFromAuth(authUser)
+  });
+  delete user.passwordHash;
+  return user;
+}
+
+async function syncBookToCloud({ quiet = false } = {}) {
+  if (!supabaseClient || !activeUser?.id) return false;
+  const { error } = await supabaseClient.from('user_books').upsert({
+    user_id: activeUser.id,
+    display_name: activeUser.name,
+    book: bookPayload(activeUser)
+  }, { onConflict: 'user_id' });
+  if (error) {
+    console.error('Supabase sync failed', error);
+    if (!quiet) showToast('暫時無法同步到雲端，資料已保留在此裝置。');
+    return false;
+  }
+  cacheBook(activeUser);
+  return true;
+}
+
+async function loadCloudBook(authUser) {
+  if (!supabaseClient) { renderCloudSetupError('無法載入雲端服務。請重新整理後再試。'); return; }
+  const { data, error } = await supabaseClient.from('user_books').select('display_name, book').eq('user_id', authUser.id).maybeSingle();
+  if (error) {
+    console.error('Supabase load failed', error);
+    const cached = getCachedBook(authUser.id);
+    if (cached) {
+      activeUser = normalizeUser(cached);
+      renderDashboard();
+      showToast('目前離線，顯示此裝置的暫存資料。');
+      return;
+    }
+    renderCloudSetupError('雲端帳本尚未完成設定。請先建立資料表與安全規則。');
+    return;
+  }
+  activeUser = makeUserFromCloud(authUser, data);
+  cacheBook(activeUser);
+  if (!data) await syncBookToCloud({ quiet: true });
+  renderDashboard();
+}
+
+function renderCloudSetupError(message) {
+  app.innerHTML = `<main class="auth-screen"><div class="auth-shell"><section class="auth-card"><span class="eyebrow">雲端設定</span><h1>還差最後一步。</h1><p class="subtle">${escapeHTML(message)}</p><p class="auth-note">完成 Supabase 的資料表設定後，重新整理青帳即可。</p><button class="button primary" id="cloud-retry" type="button">重新整理</button></section></div></main>`;
+  app.querySelector('#cloud-retry').addEventListener('click', () => window.location.reload());
 }
 
 function showToast(message) {
@@ -160,7 +246,7 @@ function renderAuth(mode = 'login') {
         <section class="auth-card">
           <span class="eyebrow">Your personal money space</span>
           <h1>${mode === 'login' ? '歡迎回來。' : '從今天開始，\n看見你的資產。'}</h1>
-          <p class="subtle">${mode === 'login' ? '登入後，繼續追蹤你每一個月的財務變化。' : '建立一個只屬於你的資產帳本，資料會保留在這台裝置。'}</p>
+          <p class="subtle">${mode === 'login' ? '登入後，可在手機與電腦繼續追蹤每一個月的財務變化。' : '建立一個只屬於你的雲端資產帳本，資料會安全同步。'}</p>
           <div class="tabs"><button class="tab ${mode === 'login' ? 'active' : ''}" data-auth-mode="login">登入</button><button class="tab ${mode === 'register' ? 'active' : ''}" data-auth-mode="register">建立帳號</button></div>
           <form id="auth-form">
             ${mode === 'register' ? '<div class="form-row"><label for="name">你的稱呼</label><input id="name" name="name" autocomplete="name" placeholder="例如：小青" required maxlength="30"></div>' : ''}
@@ -179,24 +265,37 @@ function renderAuth(mode = 'login') {
 
 async function handleAuth(event, mode) {
   event.preventDefault();
+  if (!supabaseClient) { renderCloudSetupError('無法載入雲端服務。請重新整理後再試。'); return; }
   const form = new FormData(event.target);
   const email = String(form.get('email')).trim().toLowerCase();
   const password = String(form.get('password'));
   const error = app.querySelector('#form-error');
-  const users = getUsers();
+  const submitButton = app.querySelector('#auth-form button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.textContent = mode === 'login' ? '登入中…' : '建立中…';
   if (mode === 'register') {
-    if (users[email]) { error.textContent = '這個電子信箱已經建立過帳號，請直接登入。'; return; }
     const name = String(form.get('name')).trim();
-    if (!name) { error.textContent = '請填寫你的稱呼。'; return; }
-    users[email] = defaultUser(name, email, await hash(password));
-    saveUsers(users);
-    localStorage.setItem(STORAGE.session, email);
-    renderDashboard(); showToast('帳本已建立，從這裡開始吧！');
+    if (!name) { error.textContent = '請填寫你的稱呼。'; submitButton.disabled = false; submitButton.textContent = '建立我的帳本'; return; }
+    const { data, error: authError } = await supabaseClient.auth.signUp({
+      email,
+      password,
+      options: { data: { display_name: name }, emailRedirectTo: window.location.origin + window.location.pathname }
+    });
+    if (authError) { error.textContent = authError.message; submitButton.disabled = false; submitButton.textContent = '建立我的帳本'; return; }
+    if (!data.session) {
+      error.textContent = '驗證信已寄出，請到信箱完成驗證後再回來登入。';
+      submitButton.disabled = false;
+      submitButton.textContent = '建立我的帳本';
+      return;
+    }
+    await loadCloudBook(data.user);
+    showToast('雲端帳本已建立，從這裡開始吧！');
     return;
   }
-  if (!users[email] || users[email].passwordHash !== await hash(password)) { error.textContent = '電子信箱或密碼不正確。'; return; }
-  localStorage.setItem(STORAGE.session, email);
-  renderDashboard(); showToast(`歡迎回來，${users[email].name}！`);
+  const { data, error: authError } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (authError) { error.textContent = '電子信箱或密碼不正確，或帳號尚未完成驗證。'; submitButton.disabled = false; submitButton.textContent = '登入我的帳本'; return; }
+  await loadCloudBook(data.user);
+  showToast(`歡迎回來，${getUser()?.name || '你'}！`);
 }
 
 function renderDashboard() {
@@ -374,11 +473,28 @@ function openMonthlyExpenseModal(id) {
 
 function openAccountModal() {
   const user = getUser();
-  openModal(`<header class="modal-header"><div><span class="eyebrow">帳號設定</span><h2>${escapeHTML(user.name)}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><p class="subtle">${escapeHTML(user.email)}</p><hr class="divider"><p class="form-note">你的帳本資料只儲存在這台裝置的瀏覽器中。若清除瀏覽器資料，內容也會一起移除。</p><div class="modal-actions"><button class="button light" data-close-modal>返回</button><button class="button danger" id="confirm-logout">登出</button></div>`);
-  currentModal.querySelector('#confirm-logout').addEventListener('click', () => { localStorage.removeItem(STORAGE.session); closeModal(); renderAuth(); showToast('已登出'); });
+  openModal(`<header class="modal-header"><div><span class="eyebrow">帳號設定</span><h2>${escapeHTML(user.name)}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><p class="subtle">${escapeHTML(user.email)}</p><hr class="divider"><p class="form-note">帳本會安全同步到你的雲端帳號。換手機或電腦後，登入同一個信箱即可繼續使用。</p><div class="modal-actions"><button class="button light" data-close-modal>返回</button><button class="button danger" id="confirm-logout">登出</button></div>`);
+  currentModal.querySelector('#confirm-logout').addEventListener('click', async () => {
+    window.clearTimeout(cloudSyncTimer);
+    await syncBookToCloud({ quiet: true });
+    await supabaseClient?.auth.signOut();
+    activeUser = null;
+    closeModal();
+    renderAuth();
+    showToast('已登出');
+  });
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=14').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=15').then(registration => registration.update());
 });
-renderDashboard();
+
+async function startApp() {
+  if (!supabaseClient) { renderCloudSetupError('無法載入雲端服務。請重新整理後再試。'); return; }
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error) { renderAuth(); return; }
+  if (data.session?.user) await loadCloudBook(data.session.user);
+  else renderAuth();
+}
+
+startApp();

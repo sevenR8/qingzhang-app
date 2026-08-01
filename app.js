@@ -243,7 +243,7 @@ function renderAuth(mode = 'login') {
   app.innerHTML = `
     <main class="auth-screen">
       <div class="auth-shell">
-        <div class="brand"><span class="brand-mark">青</span> 青帳</div>
+        <div class="brand"><span class="brand-mark">青</span> 帳</div>
         <section class="auth-card">
           <span class="eyebrow">Your personal money space</span>
           <h1>${mode === 'login' ? '歡迎回來。' : '從今天開始，\n看見你的資產。'}</h1>
@@ -320,7 +320,7 @@ function renderDashboard() {
   app.innerHTML = `
     <main class="app-shell">
       <header class="topbar">
-        <div class="brand"><span class="brand-mark">青</span> 青帳</div>
+        <div class="brand"><span class="brand-mark">青</span> 帳</div>
         <div class="user-menu"><span class="avatar">${escapeHTML(initials(user.name))}</span><button class="icon-button" id="logout-button" aria-label="登出">⋯</button></div>
       </header>
       <section class="overview">
@@ -507,7 +507,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=17').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=18').then(registration => registration.update());
 });
 
 async function startApp() {

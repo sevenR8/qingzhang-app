@@ -120,6 +120,18 @@ function fixedExpensesForMonth(user, month = viewMonth) {
   if (month === todayMonth()) return user.expenses;
   return monthSnapshot(user, month)?.fixedExpenses || user.expenses;
 }
+function hasManualExpenseOrder(expenses) { return expenses.some(expense => Number.isFinite(Number(expense.sortOrder))); }
+function orderedFixedExpenses(expenses) {
+  const manuallyOrdered = hasManualExpenseOrder(expenses);
+  return expenses.slice().sort((a, b) => {
+    if (manuallyOrdered) {
+      const orderA = Number.isFinite(Number(a.sortOrder)) ? Number(a.sortOrder) : Number.MAX_SAFE_INTEGER;
+      const orderB = Number.isFinite(Number(b.sortOrder)) ? Number(b.sortOrder) : Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+    }
+    return Number(a.day || 0) - Number(b.day || 0);
+  });
+}
 function grossAssets(user, month = viewMonth) { return Object.values(assetsForMonth(user, month)).reduce((total, amount) => total + Number(amount || 0), 0); }
 function incomeForMonth(user, month = todayMonth()) { return { salary: 0, other: 0, otherNote: '', ...(user.incomes[month] || {}) }; }
 function expensesForMonth(user, month = todayMonth()) { return user.monthlyExpenses.filter(item => item.date && periodMonthForDate(item.date) === month); }
@@ -358,7 +370,7 @@ function renderDashboard() {
 
 function renderExpenses(expenses) {
   if (!expenses.length) return '<p class="expense-empty">還沒有固定開銷。<br>例如房租、訂閱服務或保險費。</p>';
-  return expenses.slice().sort((a, b) => a.day - b.day).map((expense, index) => `<button class="expense-row" data-expense="${expense.id}" title="編輯 ${escapeHTML(expense.name)}"><span class="expense-icon">${expenseIcons[index % expenseIcons.length]}</span><span><span class="expense-name">${escapeHTML(expense.name)}</span><span class="expense-meta">每月 ${expense.day} 日${expense.category ? ` · ${escapeHTML(expense.category)}` : ''}</span></span><strong class="expense-amount">$ ${money(expense.amount)}</strong></button>`).join('');
+  return orderedFixedExpenses(expenses).map((expense, index) => `<button class="expense-row fixed-expense-row" data-expense="${expense.id}" title="拖曳左側圖示排序；點選其餘區域可編輯 ${escapeHTML(expense.name)}"><span class="drag-handle" aria-hidden="true">⠿</span><span class="expense-icon">${expenseIcons[index % expenseIcons.length]}</span><span><span class="expense-name">${escapeHTML(expense.name)}</span><span class="expense-meta">每月 ${expense.day} 日${expense.category ? ` · ${escapeHTML(expense.category)}` : ''}</span></span><strong class="expense-amount">$ ${money(expense.amount)}</strong></button>`).join('');
 }
 
 function renderIncome(income, total) {
@@ -414,6 +426,7 @@ function drawChart(history) {
 }
 
 function bindDashboard() {
+  bindFixedExpenseSorting();
   document.querySelector('#previous-month').addEventListener('click', () => { viewMonth = shiftMonth(viewMonth, -1); renderDashboard(); });
   document.querySelector('#next-month').addEventListener('click', () => { viewMonth = shiftMonth(viewMonth, 1); renderDashboard(); });
   document.querySelector('#view-month').addEventListener('change', event => { if (event.target.value) { viewMonth = event.target.value; renderDashboard(); } });
@@ -429,6 +442,64 @@ function bindDashboard() {
   document.querySelectorAll('[data-monthly-expense]').forEach(button => button.addEventListener('click', () => openMonthlyExpenseModal(button.dataset.monthlyExpense)));
   document.querySelector('#mobile-history').addEventListener('click', () => document.querySelector('.chart-card').scrollIntoView({ behavior: 'smooth', block: 'center' }));
   document.querySelector('#mobile-expense').addEventListener('click', () => document.querySelector('#monthly-expenses').scrollIntoView({ behavior: 'smooth', block: 'center' }));
+}
+
+function moveFixedExpense(movedId, targetId, placeAfter) {
+  if (!movedId || !targetId || movedId === targetId) return;
+  const user = getUser();
+  const currentExpenses = fixedExpensesForMonth(user, viewMonth);
+  const ordered = orderedFixedExpenses(currentExpenses);
+  const movedIndex = ordered.findIndex(expense => expense.id === movedId);
+  if (movedIndex < 0) return;
+  const [moved] = ordered.splice(movedIndex, 1);
+  const targetIndex = ordered.findIndex(expense => expense.id === targetId);
+  if (targetIndex < 0) return;
+  ordered.splice(placeAfter ? targetIndex + 1 : targetIndex, 0, moved);
+  ordered.forEach((expense, index) => { expense.sortOrder = index; });
+  if (viewMonth === todayMonth()) user.expenses = ordered;
+  else ensureMonthSnapshot(user, viewMonth).fixedExpenses = ordered;
+  persistUser(user);
+  renderDashboard();
+  showToast('固定開銷順序已更新');
+}
+
+function bindFixedExpenseSorting() {
+  const rows = [...document.querySelectorAll('.fixed-expense-row')];
+  let dragState = null;
+  const clearMarkers = () => rows.forEach(row => row.classList.remove('dragging', 'drag-over-before', 'drag-over-after'));
+  const markTarget = (clientX, clientY) => {
+    const candidate = document.elementFromPoint(clientX, clientY)?.closest('.fixed-expense-row');
+    rows.forEach(row => row.classList.remove('drag-over-before', 'drag-over-after'));
+    if (!candidate || candidate.dataset.expense === dragState?.id) return null;
+    const rect = candidate.getBoundingClientRect();
+    const placeAfter = clientY >= rect.top + rect.height / 2;
+    candidate.classList.add(placeAfter ? 'drag-over-after' : 'drag-over-before');
+    return { id: candidate.dataset.expense, placeAfter };
+  };
+  rows.forEach(row => {
+    const handle = row.querySelector('.drag-handle');
+    handle.addEventListener('pointerdown', event => {
+      dragState = { id: row.dataset.expense, startX: event.clientX, startY: event.clientY, active: false, target: null };
+      handle.setPointerCapture?.(event.pointerId);
+    });
+    handle.addEventListener('pointermove', event => {
+      if (!dragState || dragState.id !== row.dataset.expense) return;
+      if (!dragState.active && Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) < 7) return;
+      dragState.active = true;
+      event.preventDefault();
+      row.classList.add('dragging');
+      dragState.target = markTarget(event.clientX, event.clientY);
+    });
+    const finishDrag = () => {
+      if (!dragState || dragState.id !== row.dataset.expense) return;
+      const { active, id, target } = dragState;
+      clearMarkers();
+      dragState = null;
+      if (active && target) moveFixedExpense(id, target.id, target.placeAfter);
+    };
+    handle.addEventListener('pointerup', finishDrag);
+    handle.addEventListener('pointercancel', () => { clearMarkers(); dragState = null; });
+  });
 }
 
 function openModal(content) {
@@ -480,7 +551,27 @@ function openExpenseModal(id) {
   const user = getUser(); const fixedExpenses = fixedExpensesForMonth(user, viewMonth); const expense = id ? fixedExpenses.find(item => item.id === id) : null;
   openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(viewMonth)}固定開銷</span><h2>${expense ? '編輯固定開銷' : '新增固定開銷'}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="expense-form"><div class="form-row"><label for="expense-name">項目名稱</label><input id="expense-name" name="name" value="${escapeHTML(expense?.name || '')}" placeholder="例如：房租" required maxlength="40"></div><div class="form-row"><label for="expense-amount">每月金額（TWD）</label><input id="expense-amount" name="amount" type="text" value="${inputAmount(expense?.amount)}" placeholder="例如：30000+1200" required inputmode="text" data-calculator></div><div class="form-row"><label for="expense-day">扣款日</label><select id="expense-day" name="day">${Array.from({length:31},(_,i) => `<option value="${i+1}" ${(expense?.day || 1) === i+1 ? 'selected' : ''}>每月 ${i+1} 日</option>`).join('')}</select></div><div class="form-row"><label for="expense-category">分類（選填）</label><input id="expense-category" name="category" value="${escapeHTML(expense?.category || '')}" placeholder="例如：居住、訂閱、保險" maxlength="30"></div><div class="modal-actions">${expense ? '<button type="button" class="button danger" id="delete-expense">刪除</button>' : ''}<button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">${expense ? '儲存變更' : '新增開銷'}</button></div></form>`);
   const expenseForm = currentModal.querySelector('#expense-form'); enableAmountCalculator(expenseForm);
-  expenseForm.addEventListener('submit', event => { event.preventDefault(); const form = new FormData(expenseForm), user = getUser(), amount = amountFromForm(expenseForm, 'amount'); if (amount === null) return; const entry = { id: expense?.id || crypto.randomUUID(), name: String(form.get('name')).trim(), amount, day: Number(form.get('day')), category: String(form.get('category')).trim() }; if (viewMonth === todayMonth()) { if (expense) user.expenses = user.expenses.map(item => item.id === expense.id ? entry : item); else user.expenses.push(entry); } else { const snapshot = ensureMonthSnapshot(user, viewMonth); if (expense) snapshot.fixedExpenses = snapshot.fixedExpenses.map(item => item.id === expense.id ? entry : item); else snapshot.fixedExpenses.push(entry); } refreshMonthSnapshotTotal(user, viewMonth); persistUser(user); closeModal(); renderDashboard(); showToast(expense ? '固定開銷已更新' : '固定開銷已新增'); });
+  expenseForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const form = new FormData(expenseForm), user = getUser(), amount = amountFromForm(expenseForm, 'amount');
+    if (amount === null) return;
+    const entry = { id: expense?.id || crypto.randomUUID(), name: String(form.get('name')).trim(), amount, day: Number(form.get('day')), category: String(form.get('category')).trim() };
+    if (Number.isFinite(Number(expense?.sortOrder))) entry.sortOrder = Number(expense.sortOrder);
+    else if (!expense && hasManualExpenseOrder(fixedExpenses)) entry.sortOrder = Math.max(...fixedExpenses.map(item => Number(item.sortOrder) || 0)) + 1;
+    if (viewMonth === todayMonth()) {
+      if (expense) user.expenses = user.expenses.map(item => item.id === expense.id ? entry : item);
+      else user.expenses.push(entry);
+    } else {
+      const snapshot = ensureMonthSnapshot(user, viewMonth);
+      if (expense) snapshot.fixedExpenses = snapshot.fixedExpenses.map(item => item.id === expense.id ? entry : item);
+      else snapshot.fixedExpenses.push(entry);
+    }
+    refreshMonthSnapshotTotal(user, viewMonth);
+    persistUser(user);
+    closeModal();
+    renderDashboard();
+    showToast(expense ? '固定開銷已更新' : '固定開銷已新增');
+  });
   currentModal.querySelector('#delete-expense')?.addEventListener('click', () => { const user = getUser(); if (viewMonth === todayMonth()) user.expenses = user.expenses.filter(item => item.id !== expense.id); else { const snapshot = ensureMonthSnapshot(user, viewMonth); snapshot.fixedExpenses = snapshot.fixedExpenses.filter(item => item.id !== expense.id); } refreshMonthSnapshotTotal(user, viewMonth); persistUser(user); closeModal(); renderDashboard(); showToast('固定開銷已刪除'); });
 }
 
@@ -508,7 +599,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=19').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=20').then(registration => registration.update());
 });
 
 async function startApp() {

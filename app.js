@@ -768,7 +768,7 @@ function twQuoteSourceText(holding, isCurrentMonth = true) {
 }
 
 async function refreshTwHoldingQuotes(ids = null, { silent = false, refreshModal = true, month = viewMonth } = {}) {
-  if (month !== todayMonth()) {
+  if (month < todayMonth()) {
     if (!silent) showToast('過去月份使用已儲存的價格，不會套用今天行情。');
     return false;
   }
@@ -824,17 +824,18 @@ function openTwStockModal(editId = null) {
   const estimatedTotal = twHoldingsTotal(user, month);
   const modeIsHoldings = state.mode === 'holdings';
   const isCurrentMonth = month === todayMonth();
+  const canRefreshQuotes = month >= todayMonth();
   const assets = assetsForMonth(user, month);
   if (!hadState) persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · ${twQuoteSourceText(holding, isCurrentMonth)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(holdingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · ${twQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(holdingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入持股。<br>輸入股票代碼與股數後，系統會估算目前市值。</p>';
-  const quoteToolbar = isCurrentMonth ? `<button class="button light compact-button" id="refresh-tw-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : '<span class="tw-snapshot-note">此月份價格已凍結，不會套用今天行情</span>';
+  const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-tw-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : '<span class="tw-snapshot-note">此月份價格已凍結，不會套用今天行情</span>';
   const summaryContent = modeIsHoldings
     ? `<span>持股估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>已用此金額更新這個月份的台股總額</small>`
     : `<form id="tw-manual-total-form" class="tw-manual-total-form"><label for="tw-manual-total">台股手動總額</label><div class="tw-manual-total-input"><span>NT$</span><input id="tw-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：121300+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="tw-manual-total-preview">目前使用手動總額 NT$ ${money(assets.tw)}</small><div class="form-error" id="tw-manual-total-error"></div></form>`;
-  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}台股資產</span><h2>台股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="tw-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新台股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="tw-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="tw-symbol">股票代碼</label><input id="tw-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：2330台積電" autocomplete="off" required maxlength="20"></div><div class="form-row"><label for="tw-shares">持有股數</label><input id="tw-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：22" min="1" step="1" required inputmode="numeric"></div></div><div class="form-error" id="tw-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-tw-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${isCurrentMonth ? '只需輸入股票代碼與股數，系統會自動更新行情。' : '歷史月份會保留既有價格；新增股票時會沿用最近保存的價格。'}</p>`);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}台股資產</span><h2>台股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="tw-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新台股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="tw-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="tw-symbol">股票代碼</label><input id="tw-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：2330台積電" autocomplete="off" required maxlength="20"></div><div class="form-row"><label for="tw-shares">持有股數</label><input id="tw-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：22" min="1" step="1" required inputmode="numeric"></div></div><div class="form-error" id="tw-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-tw-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '只需輸入股票代碼與股數，系統會自動更新行情。' : '此月份尚未開始，先使用目前行情預估；進入該月份後會再更新。' : '歷史月份會保留既有價格；新增股票時會沿用最近保存的價格。'}</p>`);
   currentModal.querySelector('#refresh-tw-quotes')?.addEventListener('click', () => refreshTwHoldingQuotes(null, { month }));
   const manualTotalForm = currentModal.querySelector('#tw-manual-total-form');
   if (manualTotalForm) {
@@ -917,18 +918,18 @@ function openTwStockModal(editId = null) {
     if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這檔股票已在持股清單中。'; return; }
     const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, priceSource: '', quoteAt: '' };
     const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
-    const savedHolding = !isCurrentMonth && (!editing || symbolChanged) ? nearestSavedTwHolding(user, symbol, month) : null;
+    const savedHolding = !canRefreshQuotes && (!editing || symbolChanged) ? nearestSavedTwHolding(user, symbol, month) : null;
     holding.symbol = symbol;
     holding.shares = shares;
     if (enteredName) holding.name = enteredName;
     else if (savedHolding?.name) holding.name = savedHolding.name;
     else if (symbolChanged) holding.name = '';
-    if (!isCurrentMonth && (!editing || symbolChanged)) {
+    if (!canRefreshQuotes && (!editing || symbolChanged)) {
       holding.price = Number(savedHolding?.price || 0);
       holding.priceSource = savedHolding ? 'snapshot' : '';
       holding.quoteAt = savedHolding?.quoteAt || '';
       holding.isClose = false;
-    } else if (isCurrentMonth && symbolChanged) {
+    } else if (canRefreshQuotes && symbolChanged) {
       holding.price = 0;
       holding.priceSource = '';
       holding.quoteAt = '';
@@ -936,7 +937,7 @@ function openTwStockModal(editId = null) {
     if (!editing) holdings.push(holding);
     applyTwHoldingsTotal(user, month);
     persistUser(user);
-    if (isCurrentMonth) {
+    if (canRefreshQuotes) {
       const refreshed = await refreshTwHoldingQuotes([holding.id], { month });
       if (!refreshed) {
         renderDashboard();
@@ -949,8 +950,8 @@ function openTwStockModal(editId = null) {
       showToast(editing ? '持股已更新' : savedHolding ? '持股已加入，並沿用最近保存的價格' : '持股已加入，尚無可沿用的歷史價格');
     }
   });
-  const staleHoldings = isCurrentMonth ? holdings.filter(holding => holding.priceSource !== 'fugle' || !holding.quoteAt || Date.now() - new Date(holding.quoteAt).getTime() > 5 * 60 * 1000) : [];
-  if (isCurrentMonth && staleHoldings.length && Date.now() - twAutoRefreshAttemptedAt > 60 * 1000) {
+  const staleHoldings = canRefreshQuotes ? holdings.filter(holding => holding.priceSource !== 'fugle' || !holding.quoteAt || Date.now() - new Date(holding.quoteAt).getTime() > 5 * 60 * 1000) : [];
+  if (canRefreshQuotes && staleHoldings.length && Date.now() - twAutoRefreshAttemptedAt > 60 * 1000) {
     twAutoRefreshAttemptedAt = Date.now();
     window.setTimeout(() => refreshTwHoldingQuotes(staleHoldings.map(holding => holding.id), { silent: true, refreshModal: false, month }), 0);
   }
@@ -973,7 +974,7 @@ function usQuoteSourceText(holding, isCurrentMonth = true) {
 }
 
 async function refreshUsHoldingQuotes(ids = null, { silent = false, refreshModal = true, month = viewMonth } = {}) {
-  if (month !== todayMonth()) {
+  if (month < todayMonth()) {
     if (!silent) showToast('過去月份使用已儲存的美股價格與匯率。');
     return false;
   }
@@ -1029,17 +1030,18 @@ function openUsStockModal(editId = null) {
   const estimatedTotal = usHoldingsTotal(user, month);
   const modeIsHoldings = state.mode === 'holdings';
   const isCurrentMonth = month === todayMonth();
+  const canRefreshQuotes = month >= todayMonth();
   const assets = assetsForMonth(user, month);
   if (!hadState) persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, isCurrentMonth)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-us-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-us-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入美股持股。<br>輸入股票代碼與股數後，系統會換算為台幣市值。</p>';
-  const quoteToolbar = isCurrentMonth ? `<button class="button light compact-button" id="refresh-us-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : '<span class="tw-snapshot-note">此月份股價與匯率已凍結，不會套用今天行情</span>';
+  const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-us-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : '<span class="tw-snapshot-note">此月份股價與匯率已凍結，不會套用今天行情</span>';
   const summaryContent = modeIsHoldings
     ? `<span>持股估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>美元股價已依保存的 USD/TWD 匯率換算</small>`
     : `<form id="us-manual-total-form" class="tw-manual-total-form"><label for="us-manual-total">美股手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="us-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：300000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="us-manual-total-preview">目前使用手動總額 NT$ ${money(assets.us)}</small><div class="form-error" id="us-manual-total-error"></div></form>`;
-  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}美股資產</span><h2>美股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="us-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新美股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="us-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="us-symbol">美股代碼</label><input id="us-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：AAPL" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="us-shares">持有股數</label><input id="us-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：10" min="0.0001" step="0.0001" required inputmode="decimal"></div></div><div class="form-error" id="us-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-us-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${isCurrentMonth ? '系統會自動取得美元股價與 USD/TWD 匯率，再換算成台幣。' : '歷史月份會保留既有股價與匯率；新增股票時會沿用最近保存的資料。'}</p>`);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}美股資產</span><h2>美股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="us-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新美股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="us-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="us-symbol">美股代碼</label><input id="us-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：AAPL" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="us-shares">持有股數</label><input id="us-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：10" min="0.0001" step="0.0001" required inputmode="decimal"></div></div><div class="form-error" id="us-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-us-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '系統會自動取得美元股價與 USD/TWD 匯率，再換算成台幣。' : '此月份尚未開始，先使用目前股價與匯率預估；進入該月份後會再更新。' : '歷史月份會保留既有股價與匯率；新增股票時會沿用最近保存的資料。'}</p>`);
   currentModal.querySelector('#refresh-us-quotes')?.addEventListener('click', () => refreshUsHoldingQuotes(null, { month }));
   const manualTotalForm = currentModal.querySelector('#us-manual-total-form');
   if (manualTotalForm) {
@@ -1120,16 +1122,16 @@ function openUsStockModal(editId = null) {
     if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這檔股票已在持股清單中。'; return; }
     const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, exchangeRate: 0, priceSource: '', quoteAt: '' };
     const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
-    const savedHolding = !isCurrentMonth && (!editing || symbolChanged) ? nearestSavedUsHolding(user, symbol, month) : null;
+    const savedHolding = !canRefreshQuotes && (!editing || symbolChanged) ? nearestSavedUsHolding(user, symbol, month) : null;
     holding.symbol = symbol;
     holding.shares = shares;
-    if (!isCurrentMonth && (!editing || symbolChanged)) {
+    if (!canRefreshQuotes && (!editing || symbolChanged)) {
       holding.name = savedHolding?.name || symbol;
       holding.price = Number(savedHolding?.price || 0);
       holding.exchangeRate = Number(savedHolding?.exchangeRate || 0);
       holding.priceSource = savedHolding ? 'snapshot' : '';
       holding.quoteAt = savedHolding?.quoteAt || '';
-    } else if (isCurrentMonth && symbolChanged) {
+    } else if (canRefreshQuotes && symbolChanged) {
       holding.name = symbol;
       holding.price = 0;
       holding.exchangeRate = 0;
@@ -1139,7 +1141,7 @@ function openUsStockModal(editId = null) {
     if (!editing) holdings.push(holding);
     applyUsHoldingsTotal(user, month);
     persistUser(user);
-    if (isCurrentMonth) {
+    if (canRefreshQuotes) {
       const refreshed = await refreshUsHoldingQuotes([holding.id], { month });
       if (!refreshed) {
         renderDashboard();
@@ -1151,8 +1153,8 @@ function openUsStockModal(editId = null) {
       showToast(editing ? '美股持股已更新' : savedHolding ? '持股已加入，並沿用最近保存的價格與匯率' : '持股已加入，尚無可沿用的歷史行情');
     }
   });
-  const staleHoldings = isCurrentMonth ? holdings.filter(holding => holding.priceSource !== 'yahoo' || !holding.quoteAt || Date.now() - new Date(holding.quoteAt).getTime() > 5 * 60 * 1000) : [];
-  if (isCurrentMonth && staleHoldings.length && Date.now() - usAutoRefreshAttemptedAt > 60 * 1000) {
+  const staleHoldings = canRefreshQuotes ? holdings.filter(holding => holding.priceSource !== 'yahoo' || !holding.quoteAt || Date.now() - new Date(holding.quoteAt).getTime() > 5 * 60 * 1000) : [];
+  if (canRefreshQuotes && staleHoldings.length && Date.now() - usAutoRefreshAttemptedAt > 60 * 1000) {
     usAutoRefreshAttemptedAt = Date.now();
     window.setTimeout(() => refreshUsHoldingQuotes(staleHoldings.map(holding => holding.id), { silent: true, refreshModal: false, month }), 0);
   }
@@ -1267,7 +1269,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=30').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=31').then(registration => registration.update());
 });
 
 async function startApp() {

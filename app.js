@@ -599,7 +599,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=24').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=25').then(registration => registration.update());
 });
 
 async function startApp() {

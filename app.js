@@ -787,8 +787,6 @@ function renderDashboard() {
   const monthlyBalance = thisMonthIncomeTotal - actualMonthlyOutgoings;
   const endingCash = endingCashForMonth(user, viewMonth);
   const comparison = monthlyChange(user, total, viewMonth);
-  const selectedSnapshot = monthSnapshot(user, viewMonth);
-  const hasSnapshotDetails = Boolean(selectedSnapshot?.assets);
   const chartHistory = user.history.filter(item => item.month <= todayMonth());
   app.innerHTML = `
     <main class="app-shell">
@@ -801,7 +799,7 @@ function renderDashboard() {
         <div class="total-number">$ ${money(total)}</div>
         <span class="currency-label">TWD</span>
         <div class="overview-ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong></div>
-        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）${hasSnapshotDetails ? '' : ' · 尚未同步'}</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
+        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
       <section class="month-switcher compact mobile-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
       <div class="dashboard-grid">
@@ -1823,7 +1821,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=39').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=40').then(registration => registration.update());
 });
 
 async function startApp() {

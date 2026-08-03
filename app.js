@@ -816,9 +816,8 @@ function renderDashboard() {
         <div class="total-number">$ ${money(total)}</div>
         <span class="currency-label">TWD</span>
         <div class="overview-ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong></div>
-        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip ${monthDateClass}">${monthText(viewMonth)}（${periodRangeText(viewMonth)}）</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
+        <div class="overview-bottom"><div class="overview-meta"><div class="date-chip overview-month-control ${monthDateClass}" aria-label="切換查看月份"><button class="overview-month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><label class="overview-month-label"><span>${monthText(viewMonth)}（${periodRangeText(viewMonth)}）</span><input class="view-month-input" type="month" value="${viewMonth}" aria-label="選擇查看月份"></label><button class="overview-month-arrow" data-month-shift="1" aria-label="下個月">›</button></div><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
-      <section class="month-switcher compact mobile-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
       <div class="dashboard-grid">
         <section>
           <div class="section-heading"><div><h2>資產配置</h2><p>點選卡片，更新目前總價</p></div><button class="text-button" id="asset-summary-button">查看明細</button></div>
@@ -828,7 +827,6 @@ function renderDashboard() {
           <section class="chart-card"><div class="chart-header"><div><h3>總資產變化</h3><span>${chartHistory.length > 1 ? `已追蹤 ${chartHistory.length} 個月份` : '同步本月資產後，會顯示走勢'}</span></div><span class="chart-caption">NT$ 100K / 格</span></div><div id="asset-chart" class="chart-wrap"></div></section>
         </section>
         <section>
-          <section class="month-switcher compact desktop-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
           <div class="section-heading"><div><h2>本月收入</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}</p></div><button class="text-button" id="edit-income-button">更新收入</button></div>
           <section class="income-card" id="income">${renderIncome(thisMonthIncome, thisMonthIncomeTotal)}</section>
           <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月</p></div><button class="text-button" id="add-expense-button">＋ 新增</button></div>
@@ -1948,7 +1946,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=45').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=46').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

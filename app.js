@@ -1042,11 +1042,11 @@ function openModal(content) {
   closeModal();
   currentModal = document.createElement('div');
   currentModal.className = 'modal-backdrop';
-  currentModal.innerHTML = `<section class="modal" role="dialog" aria-modal="true">${content}</section>`;
+  currentModal.innerHTML = `<section class="modal" role="dialog" aria-modal="true" tabindex="-1">${content}</section>`;
   document.body.append(currentModal);
   bindModalSwipeToClose(currentModal);
   currentModal.querySelectorAll('[data-close-modal]').forEach(button => button.addEventListener('click', closeModal));
-  currentModal.querySelector('input, select')?.focus();
+  currentModal.querySelector('.modal')?.focus({ preventScroll: true });
 }
 function closeModal() { currentModal?.remove(); currentModal = null; }
 
@@ -1058,6 +1058,7 @@ function bindModalSwipeToClose(backdrop) {
     modal.classList.remove('modal-swipe-active', 'modal-swipe-settling');
     modal.style.removeProperty('transition');
     modal.style.removeProperty('transform');
+    modal.style.removeProperty('opacity');
     backdrop.style.removeProperty('transition');
     backdrop.style.removeProperty('background');
   };
@@ -1084,29 +1085,33 @@ function bindModalSwipeToClose(backdrop) {
     swipe.distance = distance;
     const progress = Math.min(distance / Math.max(swipe.width * .75, 1), 1);
     modal.style.transform = `translate3d(${distance}px, 0, 0)`;
+    modal.style.opacity = String(Math.max(.6, 1 - progress * .4));
     backdrop.style.background = `rgba(10, 36, 31, ${Math.max(.05, .43 * (1 - progress))})`;
   });
   const settleSwipe = (gesture, shouldClose) => {
     const currentDistance = Math.max(0, Number(gesture.distance || 0));
-    const duration = shouldClose ? 200 : 170;
+    const currentProgress = Math.min(currentDistance / Math.max(gesture.width * .75, 1), 1);
+    const duration = shouldClose ? 190 : 170;
     modal.style.transform = `translate3d(${currentDistance}px, 0, 0)`;
+    modal.style.opacity = String(Math.max(.6, 1 - currentProgress * .4));
     modal.style.transition = 'none';
     backdrop.style.transition = 'none';
     modal.classList.remove('modal-swipe-active');
     modal.classList.add('modal-swipe-settling');
     void modal.offsetWidth;
-    modal.style.transition = `transform ${duration}ms cubic-bezier(.22,.75,.26,1)`;
+    modal.style.transition = `transform ${duration}ms cubic-bezier(.22,.75,.26,1), opacity ${duration}ms ease`;
     backdrop.style.transition = `background ${duration}ms ease`;
     const targetDistance = Math.ceil(Math.max(window.innerWidth - gesture.left + 48, gesture.width + 48));
     window.requestAnimationFrame(() => {
       modal.style.transform = shouldClose ? `translate3d(${targetDistance}px, 0, 0)` : 'translate3d(0, 0, 0)';
+      modal.style.opacity = shouldClose ? '0' : '1';
       backdrop.style.background = shouldClose ? 'rgba(10, 36, 31, 0)' : 'rgba(10, 36, 31, .43)';
     });
     window.setTimeout(() => {
       if (currentModal !== backdrop) return;
       if (shouldClose) closeModal();
       else resetSwipeStyle();
-    }, duration + 35);
+    }, duration + 70);
   };
   const finishSwipe = event => {
     if (!swipe || event.pointerId !== swipe.id) return;
@@ -1115,7 +1120,8 @@ function bindModalSwipeToClose(backdrop) {
     if (!gesture.active) { resetSwipeStyle(); return; }
     const dx = Math.max(0, event.clientX - gesture.x);
     const elapsed = Date.now() - gesture.time;
-    const shouldClose = dx >= gesture.width * .32 || (dx >= 58 && elapsed <= 420);
+    const closeDistance = Math.min(88, gesture.width * .24);
+    const shouldClose = dx >= closeDistance || (dx >= 46 && elapsed <= 460);
     gesture.distance = Math.max(gesture.distance, dx);
     settleSwipe(gesture, shouldClose);
   };
@@ -2060,7 +2066,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=50').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=51').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

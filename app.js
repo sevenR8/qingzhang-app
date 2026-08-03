@@ -340,6 +340,7 @@ function renderDashboard() {
         <p class="overview-label">我的總資產</p>
         <div class="total-number">$ ${money(total)}</div>
         <span class="currency-label">TWD</span>
+        <div class="overview-ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong></div>
         <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）${hasSnapshotDetails ? '' : ' · 尚未同步'}</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
       <div class="dashboard-grid">
@@ -598,7 +599,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=22').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=23').then(registration => registration.update());
 });
 
 async function startApp() {

@@ -1044,11 +1044,29 @@ function openModal(content) {
   currentModal.className = 'modal-backdrop';
   currentModal.innerHTML = `<section class="modal" role="dialog" aria-modal="true" tabindex="-1">${content}</section>`;
   document.body.append(currentModal);
+  lockPageForModal(currentModal);
   bindModalSwipeToClose(currentModal);
   currentModal.querySelectorAll('[data-close-modal]').forEach(button => button.addEventListener('click', closeModal));
   currentModal.querySelector('.modal')?.focus({ preventScroll: true });
 }
-function closeModal() { currentModal?.remove(); currentModal = null; }
+function lockPageForModal(backdrop) {
+  const scrollY = window.scrollY;
+  backdrop.dataset.pageScrollY = String(scrollY);
+  document.documentElement.classList.add('modal-page-locked');
+  document.body.classList.add('modal-page-locked');
+  document.body.style.top = `-${scrollY}px`;
+}
+function closeModal() {
+  if (!currentModal) return;
+  const closingModal = currentModal;
+  const scrollY = Number(closingModal.dataset.pageScrollY || 0);
+  currentModal = null;
+  closingModal.remove();
+  document.documentElement.classList.remove('modal-page-locked');
+  document.body.classList.remove('modal-page-locked');
+  document.body.style.removeProperty('top');
+  window.scrollTo(0, scrollY);
+}
 
 function bindModalSwipeToClose(backdrop) {
   const modal = backdrop.querySelector('.modal');
@@ -1062,14 +1080,18 @@ function bindModalSwipeToClose(backdrop) {
     backdrop.style.removeProperty('transition');
     backdrop.style.removeProperty('background');
   };
-  modal.addEventListener('pointerdown', event => {
+  backdrop.addEventListener('pointerdown', event => {
     if (!window.matchMedia('(max-width: 699px)').matches || event.isPrimary === false || event.button !== 0) return;
-    if (event.target.closest('button, input, select, textarea, label, .drag-handle')) return;
     const rect = modal.getBoundingClientRect();
-    if (event.clientX > rect.left + 56) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const startedInsideModal = Boolean(target && modal.contains(target));
+    if (startedInsideModal) {
+      if (target.closest('button, input, select, textarea, label, .drag-handle')) return;
+      if (event.clientX > rect.left + 56) return;
+    }
     swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), left: rect.left, width: rect.width, distance: 0, active: false, cancelled: false };
   });
-  modal.addEventListener('pointermove', event => {
+  backdrop.addEventListener('pointermove', event => {
     if (!swipe || event.pointerId !== swipe.id || swipe.cancelled) return;
     const dx = event.clientX - swipe.x;
     const dy = event.clientY - swipe.y;
@@ -1078,7 +1100,7 @@ function bindModalSwipeToClose(backdrop) {
       if (dx < 10 || dx < Math.abs(dy) * 1.2) return;
       swipe.active = true;
       modal.classList.add('modal-swipe-active');
-      modal.setPointerCapture?.(event.pointerId);
+      backdrop.setPointerCapture?.(event.pointerId);
     }
     event.preventDefault();
     const distance = Math.max(0, dx);
@@ -1125,8 +1147,8 @@ function bindModalSwipeToClose(backdrop) {
     gesture.distance = Math.max(gesture.distance, dx);
     settleSwipe(gesture, shouldClose);
   };
-  modal.addEventListener('pointerup', finishSwipe);
-  modal.addEventListener('pointercancel', event => {
+  backdrop.addEventListener('pointerup', finishSwipe);
+  backdrop.addEventListener('pointercancel', event => {
     if (!swipe || event.pointerId !== swipe.id) return;
     const gesture = swipe;
     swipe = null;
@@ -2066,7 +2088,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=51').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=52').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

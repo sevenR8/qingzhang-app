@@ -26,6 +26,8 @@ let activeUser = null;
 let cloudSyncTimer;
 let twQuoteRequestInFlight = false;
 let twAutoRefreshAttemptedAt = 0;
+let usQuoteRequestInFlight = false;
+let usAutoRefreshAttemptedAt = 0;
 
 function getLegacyUsers() {
   try { return JSON.parse(localStorage.getItem(STORAGE.legacyUsers) || '{}'); }
@@ -49,6 +51,10 @@ function normalizeUser(user) {
   user.twStockMode ||= 'manual';
   if (!Number.isFinite(Number(user.twManualTotal))) user.twManualTotal = Number(user.assets.tw || 0);
   migrateLegacyTwStockData(user);
+  user.usHoldings ||= [];
+  user.usStockMode ||= 'manual';
+  if (!Number.isFinite(Number(user.usManualTotal))) user.usManualTotal = Number(user.assets.us || 0);
+  migrateLegacyUsStockData(user);
   return user;
 }
 function getUser() { return normalizeUser(activeUser); }
@@ -138,6 +144,87 @@ function nearestSavedTwHolding(user, symbol, month = viewMonth) {
   const candidates = Object.entries(user.twStockByMonth || {})
     .filter(([savedMonth]) => savedMonth !== month)
     .map(([savedMonth, state]) => ({ savedMonth, holding: state?.holdings?.find(item => item.symbol === symbol && Number(item.price) > 0) }))
+    .filter(item => item.holding);
+  const previous = candidates.filter(item => item.savedMonth < month).sort((a, b) => b.savedMonth.localeCompare(a.savedMonth))[0];
+  const following = candidates.filter(item => item.savedMonth > month).sort((a, b) => a.savedMonth.localeCompare(b.savedMonth))[0];
+  return (previous || following)?.holding || null;
+}
+function normalizeUsStockSymbol(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return /^[A-Z][A-Z0-9.-]{0,9}$/.test(normalized) ? normalized : '';
+}
+function usHoldingMarketValue(holding) {
+  return Number(holding.shares || 0) * Number(holding.price || 0) * Number(holding.exchangeRate || 0);
+}
+function cloneUsHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
+function normalizeUsStockState(state, fallbackManualTotal = 0) {
+  const normalized = state && typeof state === 'object' ? state : {};
+  if (!Array.isArray(normalized.holdings)) normalized.holdings = [];
+  normalized.mode = normalized.mode === 'holdings' ? 'holdings' : 'manual';
+  if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
+  return normalized;
+}
+function syncLegacyUsStockData(user, month = todayMonth()) {
+  if (month !== todayMonth()) return;
+  const state = user.usStockByMonth?.[month];
+  if (!state) return;
+  user.usHoldings = state.holdings;
+  user.usStockMode = state.mode;
+  user.usManualTotal = state.manualTotal;
+}
+function migrateLegacyUsStockData(user) {
+  if (!user.usStockByMonth || typeof user.usStockByMonth !== 'object' || Array.isArray(user.usStockByMonth)) user.usStockByMonth = {};
+  const currentMonth = todayMonth();
+  const currentState = user.usStockByMonth[currentMonth];
+  const shouldMigrateLegacy = !currentState || Number(user.usStockDataVersion || 0) < 1;
+  if (shouldMigrateLegacy) {
+    user.usStockByMonth[currentMonth] = normalizeUsStockState({
+      holdings: cloneUsHoldings(user.usHoldings),
+      mode: user.usStockMode,
+      manualTotal: user.usManualTotal
+    }, user.assets?.us);
+  }
+  Object.entries(user.usStockByMonth).forEach(([month, state]) => {
+    user.usStockByMonth[month] = normalizeUsStockState(state, month === currentMonth ? user.assets?.us : 0);
+  });
+  const activeState = user.usStockByMonth[currentMonth];
+  user.assets.us = activeState.mode === 'holdings'
+    ? Math.round(activeState.holdings.reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0))
+    : Number(activeState.manualTotal || 0);
+  user.usStockDataVersion = 1;
+  syncLegacyUsStockData(user, currentMonth);
+}
+function usStockState(user, month = viewMonth, { create = true } = {}) {
+  migrateLegacyUsStockData(user);
+  let state = user.usStockByMonth[month];
+  if (!state && create) {
+    const sourceMonth = Object.keys(user.usStockByMonth).filter(item => item < month).sort().pop();
+    const source = sourceMonth ? user.usStockByMonth[sourceMonth] : null;
+    const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
+    state = normalizeUsStockState({
+      holdings: cloneUsHoldings(source?.holdings),
+      mode: source?.mode || 'manual',
+      manualTotal: Number(monthlyAssets?.us || 0)
+    }, monthlyAssets?.us);
+    user.usStockByMonth[month] = state;
+    if (state.mode === 'holdings') {
+      const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+      assets.us = Math.round(state.holdings.reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0));
+      refreshMonthSnapshotTotal(user, month);
+    }
+  }
+  if (state) state = normalizeUsStockState(state, month === todayMonth() ? user.assets?.us : monthSnapshot(user, month)?.assets?.us);
+  syncLegacyUsStockData(user, month);
+  return state;
+}
+function usHoldingsTotal(user, month = viewMonth) {
+  const state = usStockState(user, month);
+  return Math.round((state?.holdings || []).reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0));
+}
+function nearestSavedUsHolding(user, symbol, month = viewMonth) {
+  const candidates = Object.entries(user.usStockByMonth || {})
+    .filter(([savedMonth]) => savedMonth !== month)
+    .map(([savedMonth, state]) => ({ savedMonth, holding: state?.holdings?.find(item => item.symbol === symbol && Number(item.price) > 0 && Number(item.exchangeRate) > 0) }))
     .filter(item => item.holding);
   const previous = candidates.filter(item => item.savedMonth < month).sort((a, b) => b.savedMonth.localeCompare(a.savedMonth))[0];
   const following = candidates.filter(item => item.savedMonth > month).sort((a, b) => a.savedMonth.localeCompare(b.savedMonth))[0];
@@ -276,6 +363,11 @@ function defaultUser(name, email) {
     twManualTotal: 0,
     twStockByMonth: {},
     twStockDataVersion: 0,
+    usHoldings: [],
+    usStockMode: 'manual',
+    usManualTotal: 0,
+    usStockByMonth: {},
+    usStockDataVersion: 0,
     activeAssetMonth: '',
     history: [{ month: todayMonth(), total: 0 }],
     createdAt: new Date().toISOString()
@@ -300,6 +392,11 @@ function bookPayload(user) {
     twManualTotal: user.twManualTotal,
     twStockByMonth: user.twStockByMonth,
     twStockDataVersion: user.twStockDataVersion,
+    usHoldings: user.usHoldings,
+    usStockMode: user.usStockMode,
+    usManualTotal: user.usManualTotal,
+    usStockByMonth: user.usStockByMonth,
+    usStockDataVersion: user.usStockDataVersion,
     activeAssetMonth: user.activeAssetMonth,
     history: user.history,
     createdAt: user.createdAt || new Date().toISOString()
@@ -573,11 +670,14 @@ function bindDashboard() {
 function selectViewMonth(month) {
   viewMonth = month;
   const user = getUser();
-  const hadState = Boolean(user?.twStockByMonth?.[month]);
+  const hadTwState = Boolean(user?.twStockByMonth?.[month]);
+  const hadUsState = Boolean(user?.usStockByMonth?.[month]);
   if (user) {
     twStockState(user, month);
     applyTwHoldingsTotal(user, month);
-    if (!hadState) persistUser(user);
+    usStockState(user, month);
+    applyUsHoldingsTotal(user, month);
+    if (!hadTwState || !hadUsState) persistUser(user);
   }
   renderDashboard();
 }
@@ -856,8 +956,211 @@ function openTwStockModal(editId = null) {
   }
 }
 
+function applyUsHoldingsTotal(user, month = viewMonth) {
+  const state = usStockState(user, month);
+  syncLegacyUsStockData(user, month);
+  if (state?.mode !== 'holdings') return;
+  const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+  assets.us = Math.round(state.holdings.reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0));
+  refreshMonthSnapshotTotal(user, month);
+}
+
+function usQuoteSourceText(holding, isCurrentMonth = true) {
+  if (!Number(holding.price) || !Number(holding.exchangeRate)) return '尚未取得價格';
+  if (!isCurrentMonth) return '月份快照';
+  if (holding.priceSource !== 'yahoo') return '已保存價格';
+  return '自動行情';
+}
+
+async function refreshUsHoldingQuotes(ids = null, { silent = false, refreshModal = true, month = viewMonth } = {}) {
+  if (month !== todayMonth()) {
+    if (!silent) showToast('過去月份使用已儲存的美股價格與匯率。');
+    return false;
+  }
+  if (usQuoteRequestInFlight) return false;
+  const user = getUser();
+  const state = usStockState(user, month);
+  const targets = state.holdings.filter(holding => !ids || ids.includes(holding.id));
+  if (!targets.length) return false;
+  usQuoteRequestInFlight = true;
+  const refreshButton = currentModal?.querySelector('#refresh-us-quotes');
+  if (refreshButton) { refreshButton.disabled = true; refreshButton.textContent = '更新中…'; }
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('us-stock-quote', {
+      body: { items: targets.map(holding => ({ symbol: holding.symbol })) }
+    });
+    if (error || !Array.isArray(data?.quotes)) throw new Error(error?.message || '美股行情服務尚未啟用');
+    const quoteMap = new Map(data.quotes.map(quote => [quote.symbol, quote]));
+    const now = new Date().toISOString();
+    targets.forEach(holding => {
+      const quote = quoteMap.get(holding.symbol);
+      if (!quote || !Number(quote.price) || !Number(quote.exchangeRate)) return;
+      holding.name = quote.name || holding.name || holding.symbol;
+      holding.price = Number(quote.price);
+      holding.exchangeRate = Number(quote.exchangeRate);
+      holding.priceSource = 'yahoo';
+      holding.quoteAt = quote.quoteAt || now;
+    });
+    applyUsHoldingsTotal(user, month);
+    persistUser(user);
+    renderDashboard();
+    if (refreshModal && viewMonth === month && currentModal?.querySelector('#us-holding-form')) openUsStockModal();
+    const failedCount = Array.isArray(data.errors) ? data.errors.length : 0;
+    if (!silent) showToast(failedCount ? `已更新美股行情，${failedCount} 檔暫時無報價` : '美股行情與匯率已更新');
+    return true;
+  } catch (error) {
+    console.error('US stock quote refresh failed', error);
+    if (!silent) showToast('美股行情服務尚未部署，手動總額不受影響。');
+    return false;
+  } finally {
+    usQuoteRequestInFlight = false;
+    const button = currentModal?.querySelector('#refresh-us-quotes');
+    if (button) { button.disabled = false; button.textContent = '更新價格'; }
+  }
+}
+
+function openUsStockModal(editId = null) {
+  const user = getUser();
+  const month = viewMonth;
+  const hadState = Boolean(user.usStockByMonth?.[month]);
+  const state = usStockState(user, month);
+  const holdings = state.holdings;
+  const editing = editId ? holdings.find(holding => holding.id === editId) : null;
+  const estimatedTotal = usHoldingsTotal(user, month);
+  const modeIsHoldings = state.mode === 'holdings';
+  const isCurrentMonth = month === todayMonth();
+  const assets = assetsForMonth(user, month);
+  if (!hadState) persistUser(user);
+  const rows = holdings.length ? holdings.map(holding => {
+    const updatedAt = quoteTimeText(holding.quoteAt);
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, isCurrentMonth)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-us-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
+  }).join('') : '<p class="tw-holding-empty">尚未加入美股持股。<br>輸入股票代碼與股數後，系統會換算為台幣市值。</p>';
+  const quoteToolbar = isCurrentMonth ? `<button class="button light compact-button" id="refresh-us-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : '<span class="tw-snapshot-note">此月份股價與匯率已凍結，不會套用今天行情</span>';
+  const summaryContent = modeIsHoldings
+    ? `<span>持股估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>美元股價已依保存的 USD/TWD 匯率換算</small>`
+    : `<form id="us-manual-total-form" class="tw-manual-total-form"><label for="us-manual-total">美股手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="us-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：300000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="us-manual-total-preview">目前使用手動總額 NT$ ${money(assets.us)}</small><div class="form-error" id="us-manual-total-error"></div></form>`;
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}美股資產</span><h2>美股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="us-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新美股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="us-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="us-symbol">美股代碼</label><input id="us-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：AAPL" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="us-shares">持有股數</label><input id="us-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：10" min="0.0001" step="0.0001" required inputmode="decimal"></div></div><div class="form-error" id="us-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-us-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${isCurrentMonth ? '系統會自動取得美元股價與 USD/TWD 匯率，再換算成台幣。' : '歷史月份會保留既有股價與匯率；新增股票時會沿用最近保存的資料。'}</p>`);
+  currentModal.querySelector('#refresh-us-quotes')?.addEventListener('click', () => refreshUsHoldingQuotes(null, { month }));
+  const manualTotalForm = currentModal.querySelector('#us-manual-total-form');
+  if (manualTotalForm) {
+    const input = manualTotalForm.querySelector('#us-manual-total');
+    const preview = manualTotalForm.querySelector('#us-manual-total-preview');
+    const errorHost = manualTotalForm.querySelector('#us-manual-total-error');
+    const updatePreview = () => {
+      errorHost.textContent = '';
+      if (!input.value.trim()) { preview.textContent = '可輸入 300000+5000 等算式'; return; }
+      const amount = calculateAmount(input.value);
+      preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
+    };
+    input.addEventListener('input', updatePreview);
+    manualTotalForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const amount = calculateAmount(input.value);
+      if (amount === null) {
+        errorHost.textContent = '請輸入可計算的非負金額。';
+        input.focus();
+        return;
+      }
+      const user = getUser();
+      const state = usStockState(user, month);
+      const monthAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+      state.manualTotal = amount;
+      state.mode = 'manual';
+      monthAssets.us = amount;
+      syncLegacyUsStockData(user, month);
+      refreshMonthSnapshotTotal(user, month);
+      persistUser(user);
+      renderDashboard();
+      input.value = String(amount);
+      preview.textContent = `已儲存：NT$ ${money(amount)}`;
+      errorHost.textContent = '';
+      showToast('美股手動總額已更新');
+    });
+  }
+  currentModal.querySelector('#us-auto-mode').addEventListener('change', event => {
+    const user = getUser();
+    const state = usStockState(user, month);
+    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    if (event.target.checked) {
+      state.manualTotal = Number(assets.us || 0);
+      state.mode = 'holdings';
+      applyUsHoldingsTotal(user, month);
+    } else {
+      state.mode = 'manual';
+      assets.us = Number(state.manualTotal || 0);
+      syncLegacyUsStockData(user, month);
+      refreshMonthSnapshotTotal(user, month);
+    }
+    persistUser(user);
+    renderDashboard();
+    openUsStockModal();
+    showToast(event.target.checked ? '已使用持股估值更新美股總額' : '已切回手動美股總額');
+  });
+  currentModal.querySelectorAll('[data-edit-us-holding]').forEach(button => button.addEventListener('click', () => openUsStockModal(button.dataset.editUsHolding)));
+  currentModal.querySelectorAll('[data-delete-us-holding]').forEach(button => button.addEventListener('click', () => {
+    const user = getUser();
+    const state = usStockState(user, month);
+    state.holdings = state.holdings.filter(holding => holding.id !== button.dataset.deleteUsHolding);
+    applyUsHoldingsTotal(user, month);
+    persistUser(user);
+    renderDashboard();
+    openUsStockModal();
+    showToast('美股持股已刪除');
+  }));
+  currentModal.querySelector('#cancel-us-edit')?.addEventListener('click', () => openUsStockModal());
+  const holdingForm = currentModal.querySelector('#us-holding-form');
+  holdingForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = new FormData(holdingForm);
+    const symbol = normalizeUsStockSymbol(form.get('symbol'));
+    const shares = Number(form.get('shares'));
+    const errorHost = currentModal.querySelector('#us-holding-error');
+    if (!symbol) { errorHost.textContent = '請輸入正確的美股代碼，例如 AAPL 或 BRK.B。'; return; }
+    if (!Number.isFinite(shares) || shares <= 0) { errorHost.textContent = '股數請輸入大於 0 的數字。'; return; }
+    if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這檔股票已在持股清單中。'; return; }
+    const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, exchangeRate: 0, priceSource: '', quoteAt: '' };
+    const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
+    const savedHolding = !isCurrentMonth && (!editing || symbolChanged) ? nearestSavedUsHolding(user, symbol, month) : null;
+    holding.symbol = symbol;
+    holding.shares = shares;
+    if (!isCurrentMonth && (!editing || symbolChanged)) {
+      holding.name = savedHolding?.name || symbol;
+      holding.price = Number(savedHolding?.price || 0);
+      holding.exchangeRate = Number(savedHolding?.exchangeRate || 0);
+      holding.priceSource = savedHolding ? 'snapshot' : '';
+      holding.quoteAt = savedHolding?.quoteAt || '';
+    } else if (isCurrentMonth && symbolChanged) {
+      holding.name = symbol;
+      holding.price = 0;
+      holding.exchangeRate = 0;
+      holding.priceSource = '';
+      holding.quoteAt = '';
+    }
+    if (!editing) holdings.push(holding);
+    applyUsHoldingsTotal(user, month);
+    persistUser(user);
+    if (isCurrentMonth) {
+      const refreshed = await refreshUsHoldingQuotes([holding.id], { month });
+      if (!refreshed) {
+        renderDashboard();
+        openUsStockModal();
+      }
+    } else {
+      renderDashboard();
+      openUsStockModal();
+      showToast(editing ? '美股持股已更新' : savedHolding ? '持股已加入，並沿用最近保存的價格與匯率' : '持股已加入，尚無可沿用的歷史行情');
+    }
+  });
+  const staleHoldings = isCurrentMonth ? holdings.filter(holding => holding.priceSource !== 'yahoo' || !holding.quoteAt || Date.now() - new Date(holding.quoteAt).getTime() > 5 * 60 * 1000) : [];
+  if (isCurrentMonth && staleHoldings.length && Date.now() - usAutoRefreshAttemptedAt > 60 * 1000) {
+    usAutoRefreshAttemptedAt = Date.now();
+    window.setTimeout(() => refreshUsHoldingQuotes(staleHoldings.map(holding => holding.id), { silent: true, refreshModal: false, month }), 0);
+  }
+}
+
 function openAssetModal(key) {
   if (key === 'tw') { openTwStockModal(); return; }
+  if (key === 'us') { openUsStockModal(); return; }
   openBasicAssetModal(key);
 }
 
@@ -964,7 +1267,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=29').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=30').then(registration => registration.update());
 });
 
 async function startApp() {

@@ -7,6 +7,8 @@
 - 台股只需輸入股票代碼與股數，透過 Fugle 行情估算持股市值並自動加總，不必手動填寫每股價格
 - 台股手動總額可在持股視窗上方直接編輯；勾選持股估值後，同一區域會切換為自動估算總額
 - 每個月份各自保存台股持股、股數、價格與估值模式；新月份會複製前月持股，歷史價格則維持凍結
+- 美股同樣只需輸入股票代碼與股數，系統會自動取得美元股價與 USD/TWD 匯率並換算台幣
+- 每個月份各自保存美股持股、美元價格、匯率與估值模式；手動總額可隨時與持股估值切換
 - 自動計算總資產：四項資產合計扣除本月開銷與固定開銷，並顯示較上月漲跌
 - 使用月份切換器查看與補登各月份的資產、收入、固定開銷與日常開銷
 - 所有金額欄位支援 `+`、`-`、`*`、`/` 與括號的即時計算
@@ -56,7 +58,18 @@ py -m http.server 4173
 1. 到 [Fugle Developer](https://developer.fugle.tw/) 建立行情 API Key。
 2. 在 Supabase 建立名為 `stock-quote` 的 Edge Function，內容使用 `supabase/functions/stock-quote/index.ts`。
 3. 在該專案的 Edge Function Secrets 新增 `FUGLE_API_KEY`，值為 Fugle API Key。
-4. 部署函式，並保留 JWT 驗證。
+4. 部署函式；函式程式會自行驗證登入權杖，因此 Dashboard 的「Verify JWT with legacy secret」請關閉。
 5. 登入青帳，點「台股」，輸入股票代碼與股數，系統會自動取得目前行情。
 
 只有目前月份會抓最新價格；歷史月份可獨立編輯持股與當時價格，並保留月度快照，避免過去資產被今天股價改寫。新月份第一次開啟時會複製最近月份的持股，再由使用者調整買進或賣出後的股數。
+
+## 美股自動估值
+
+美股行情不需要另外申請 API Key。前端會透過 Supabase Edge Function 取得美元股價與 USD/TWD 匯率，API 來源不會直接暴露給瀏覽器。
+
+1. 在 Supabase 建立名為 `us-stock-quote` 的 Edge Function。
+2. 函式內容使用 `supabase/functions/us-stock-quote/index.ts`。
+3. 部署函式，並關閉「Verify JWT with legacy secret」；函式本身仍會驗證使用者登入權杖。
+4. 登入青帳，點「美股」，輸入例如 `AAPL` 與持有股數。
+
+只有目前月份會更新美元股價與匯率；歷史月份會使用保存的月度快照，避免過去資產跟著今天行情變動。

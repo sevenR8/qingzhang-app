@@ -4,6 +4,7 @@
 
 - 建立帳號、登入與保留登入狀態
 - 現金、台股、美股、加密貨幣的目前總價紀錄
+- 台股可輸入股票代碼與股數，透過 Fugle 行情估算持股市值並自動加總
 - 自動計算總資產：四項資產合計扣除本月開銷與固定開銷，並顯示較上月漲跌
 - 使用月份切換器查看與補登各月份的資產、收入、固定開銷與日常開銷
 - 所有金額欄位支援 `+`、`-`、`*`、`/` 與括號的即時計算
@@ -45,3 +46,15 @@ py -m http.server 4173
 - Redirect URLs：`https://sevenr8.github.io/qingzhang-app/`
 
 `sb_publishable_...` 公開金鑰可出現在前端；資料庫密碼、`sb_secret_...`、`service_role` 與連線字串不可放入本專案。
+
+## 台股即時估值（Fugle）
+
+台股持股、股數與估值模式會隨青帳資料同步；行情 API 金鑰只存放在 Supabase Edge Function，不會出現在公開網站程式碼中。
+
+1. 到 [Fugle Developer](https://developer.fugle.tw/) 建立行情 API Key。
+2. 在 Supabase 建立名為 `stock-quote` 的 Edge Function，內容使用 `supabase/functions/stock-quote/index.ts`。
+3. 在該專案的 Edge Function Secrets 新增 `FUGLE_API_KEY`，值為 Fugle API Key。
+4. 部署函式，並保留 JWT 驗證。
+5. 登入青帳，點「台股」，輸入股票代碼與股數。需要時也能填手動價格作為備援。
+
+只有目前月份會抓最新價格；歷史月份保留當月快照，避免過去資產被今天股價改寫。

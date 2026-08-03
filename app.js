@@ -340,7 +340,7 @@ function renderDashboard() {
         <p class="overview-label">我的總資產</p>
         <div class="total-number">$ ${money(total)}</div>
         <span class="currency-label">TWD</span>
-        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）${hasSnapshotDetails ? '' : ' · 尚未同步'}</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div><button class="button" id="snapshot-button">＋ 同步此月資產</button></div>
+        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）${hasSnapshotDetails ? '' : ' · 尚未同步'}</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
       <div class="dashboard-grid">
         <section>
@@ -431,7 +431,6 @@ function bindDashboard() {
   document.querySelector('#next-month').addEventListener('click', () => { viewMonth = shiftMonth(viewMonth, 1); renderDashboard(); });
   document.querySelector('#view-month').addEventListener('change', event => { if (event.target.value) { viewMonth = event.target.value; renderDashboard(); } });
   document.querySelector('#logout-button').addEventListener('click', openAccountModal);
-  document.querySelector('#snapshot-button').addEventListener('click', openSnapshotModal);
   document.querySelector('#history-button').addEventListener('click', openHistoryModal);
   document.querySelector('#asset-summary-button').addEventListener('click', openAssetsModal);
   document.querySelector('#edit-income-button').addEventListener('click', openIncomeModal);
@@ -599,7 +598,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=21').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=22').then(registration => registration.update());
 });
 
 async function startApp() {

@@ -28,6 +28,8 @@ let twQuoteRequestInFlight = false;
 let twAutoRefreshAttemptedAt = 0;
 let usQuoteRequestInFlight = false;
 let usAutoRefreshAttemptedAt = 0;
+let cryptoQuoteRequestInFlight = false;
+let cryptoAutoRefreshAttemptedAt = 0;
 
 function getLegacyUsers() {
   try { return JSON.parse(localStorage.getItem(STORAGE.legacyUsers) || '{}'); }
@@ -55,6 +57,10 @@ function normalizeUser(user) {
   user.usStockMode ||= 'manual';
   if (!Number.isFinite(Number(user.usManualTotal))) user.usManualTotal = Number(user.assets.us || 0);
   migrateLegacyUsStockData(user);
+  user.cryptoHoldings ||= [];
+  user.cryptoMode ||= 'manual';
+  if (!Number.isFinite(Number(user.cryptoManualTotal))) user.cryptoManualTotal = Number(user.assets.crypto || 0);
+  migrateLegacyCryptoData(user);
   return user;
 }
 function getUser() { return normalizeUser(activeUser); }
@@ -70,6 +76,11 @@ function todayDate() { return localDateISO(); }
 function money(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)); }
 function inputAmount(value) { return Number(value || 0) === 0 ? '' : String(Number(value)); }
 function stockPrice(value) { return new Intl.NumberFormat('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(Number(value || 0)); }
+function cryptoAmount(value) { return new Intl.NumberFormat('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 8 }).format(Number(value || 0)); }
+function cryptoPrice(value) {
+  const price = Number(value || 0);
+  return new Intl.NumberFormat('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: price > 0 && price < 1 ? 8 : 2 }).format(price);
+}
 function normalizeStockSymbol(value) {
   const normalized = String(value || '').trim().toUpperCase();
   return normalized.match(/^[0-9A-Z]{4,6}/)?.[0] || '';
@@ -230,6 +241,87 @@ function nearestSavedUsHolding(user, symbol, month = viewMonth) {
   const following = candidates.filter(item => item.savedMonth > month).sort((a, b) => a.savedMonth.localeCompare(b.savedMonth))[0];
   return (previous || following)?.holding || null;
 }
+function normalizeCryptoSymbol(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return /^[A-Z0-9]{2,10}$/.test(normalized) ? normalized : '';
+}
+function cryptoHoldingMarketValue(holding) {
+  return Number(holding.amount || 0) * Number(holding.price || 0) * Number(holding.exchangeRate || 0);
+}
+function cloneCryptoHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
+function normalizeCryptoState(state, fallbackManualTotal = 0) {
+  const normalized = state && typeof state === 'object' ? state : {};
+  if (!Array.isArray(normalized.holdings)) normalized.holdings = [];
+  normalized.mode = normalized.mode === 'holdings' ? 'holdings' : 'manual';
+  if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
+  return normalized;
+}
+function syncLegacyCryptoData(user, month = todayMonth()) {
+  if (month !== todayMonth()) return;
+  const state = user.cryptoByMonth?.[month];
+  if (!state) return;
+  user.cryptoHoldings = state.holdings;
+  user.cryptoMode = state.mode;
+  user.cryptoManualTotal = state.manualTotal;
+}
+function migrateLegacyCryptoData(user) {
+  if (!user.cryptoByMonth || typeof user.cryptoByMonth !== 'object' || Array.isArray(user.cryptoByMonth)) user.cryptoByMonth = {};
+  const currentMonth = todayMonth();
+  const currentState = user.cryptoByMonth[currentMonth];
+  const shouldMigrateLegacy = !currentState || Number(user.cryptoDataVersion || 0) < 1;
+  if (shouldMigrateLegacy) {
+    user.cryptoByMonth[currentMonth] = normalizeCryptoState({
+      holdings: cloneCryptoHoldings(user.cryptoHoldings),
+      mode: user.cryptoMode,
+      manualTotal: user.cryptoManualTotal
+    }, user.assets?.crypto);
+  }
+  Object.entries(user.cryptoByMonth).forEach(([month, state]) => {
+    user.cryptoByMonth[month] = normalizeCryptoState(state, month === currentMonth ? user.assets?.crypto : 0);
+  });
+  const activeState = user.cryptoByMonth[currentMonth];
+  user.assets.crypto = activeState.mode === 'holdings'
+    ? Math.round(activeState.holdings.reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0))
+    : Number(activeState.manualTotal || 0);
+  user.cryptoDataVersion = 1;
+  syncLegacyCryptoData(user, currentMonth);
+}
+function cryptoState(user, month = viewMonth, { create = true } = {}) {
+  migrateLegacyCryptoData(user);
+  let state = user.cryptoByMonth[month];
+  if (!state && create) {
+    const sourceMonth = Object.keys(user.cryptoByMonth).filter(item => item < month).sort().pop();
+    const source = sourceMonth ? user.cryptoByMonth[sourceMonth] : null;
+    const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
+    state = normalizeCryptoState({
+      holdings: cloneCryptoHoldings(source?.holdings),
+      mode: source?.mode || 'manual',
+      manualTotal: Number(monthlyAssets?.crypto || 0)
+    }, monthlyAssets?.crypto);
+    user.cryptoByMonth[month] = state;
+    if (state.mode === 'holdings') {
+      const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+      assets.crypto = Math.round(state.holdings.reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0));
+      refreshMonthSnapshotTotal(user, month);
+    }
+  }
+  if (state) state = normalizeCryptoState(state, month === todayMonth() ? user.assets?.crypto : monthSnapshot(user, month)?.assets?.crypto);
+  syncLegacyCryptoData(user, month);
+  return state;
+}
+function cryptoHoldingsTotal(user, month = viewMonth) {
+  const state = cryptoState(user, month);
+  return Math.round((state?.holdings || []).reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0));
+}
+function nearestSavedCryptoHolding(user, symbol, month = viewMonth) {
+  const candidates = Object.entries(user.cryptoByMonth || {})
+    .filter(([savedMonth]) => savedMonth !== month)
+    .map(([savedMonth, state]) => ({ savedMonth, holding: state?.holdings?.find(item => item.symbol === symbol && Number(item.price) > 0 && Number(item.exchangeRate) > 0) }))
+    .filter(item => item.holding);
+  const previous = candidates.filter(item => item.savedMonth < month).sort((a, b) => b.savedMonth.localeCompare(a.savedMonth))[0];
+  const following = candidates.filter(item => item.savedMonth > month).sort((a, b) => a.savedMonth.localeCompare(b.savedMonth))[0];
+  return (previous || following)?.holding || null;
+}
 function quoteTimeText(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -368,6 +460,11 @@ function defaultUser(name, email) {
     usManualTotal: 0,
     usStockByMonth: {},
     usStockDataVersion: 0,
+    cryptoHoldings: [],
+    cryptoMode: 'manual',
+    cryptoManualTotal: 0,
+    cryptoByMonth: {},
+    cryptoDataVersion: 0,
     activeAssetMonth: '',
     history: [{ month: todayMonth(), total: 0 }],
     createdAt: new Date().toISOString()
@@ -397,6 +494,11 @@ function bookPayload(user) {
     usManualTotal: user.usManualTotal,
     usStockByMonth: user.usStockByMonth,
     usStockDataVersion: user.usStockDataVersion,
+    cryptoHoldings: user.cryptoHoldings,
+    cryptoMode: user.cryptoMode,
+    cryptoManualTotal: user.cryptoManualTotal,
+    cryptoByMonth: user.cryptoByMonth,
+    cryptoDataVersion: user.cryptoDataVersion,
     activeAssetMonth: user.activeAssetMonth,
     history: user.history,
     createdAt: user.createdAt || new Date().toISOString()
@@ -1160,9 +1262,213 @@ function openUsStockModal(editId = null) {
   }
 }
 
+function applyCryptoHoldingsTotal(user, month = viewMonth) {
+  const state = cryptoState(user, month);
+  syncLegacyCryptoData(user, month);
+  if (state?.mode !== 'holdings') return;
+  const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+  assets.crypto = Math.round(state.holdings.reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0));
+  refreshMonthSnapshotTotal(user, month);
+}
+
+function cryptoQuoteSourceText(holding, canRefreshQuotes = true) {
+  if (!Number(holding.price) || !Number(holding.exchangeRate)) return '尚未取得價格';
+  if (!canRefreshQuotes) return '月份快照';
+  if (holding.priceSource !== 'yahoo') return '已保存價格';
+  return '自動行情';
+}
+
+async function refreshCryptoQuotes(ids = null, { silent = false, refreshModal = true, month = viewMonth } = {}) {
+  if (month < todayMonth()) {
+    if (!silent) showToast('過去月份使用已儲存的加密貨幣價格與匯率。');
+    return false;
+  }
+  if (cryptoQuoteRequestInFlight) return false;
+  const user = getUser();
+  const state = cryptoState(user, month);
+  const targets = state.holdings.filter(holding => !ids || ids.includes(holding.id));
+  if (!targets.length) return false;
+  cryptoQuoteRequestInFlight = true;
+  const refreshButton = currentModal?.querySelector('#refresh-crypto-quotes');
+  if (refreshButton) { refreshButton.disabled = true; refreshButton.textContent = '更新中…'; }
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('crypto-quote', {
+      body: { items: targets.map(holding => ({ symbol: holding.symbol })) }
+    });
+    if (error || !Array.isArray(data?.quotes)) throw new Error(error?.message || '加密貨幣行情服務尚未啟用');
+    const quoteMap = new Map(data.quotes.map(quote => [quote.symbol, quote]));
+    const now = new Date().toISOString();
+    targets.forEach(holding => {
+      const quote = quoteMap.get(holding.symbol);
+      if (!quote || !Number(quote.price) || !Number(quote.exchangeRate)) return;
+      holding.name = quote.name || holding.name || holding.symbol;
+      holding.price = Number(quote.price);
+      holding.exchangeRate = Number(quote.exchangeRate);
+      holding.priceSource = 'yahoo';
+      holding.quoteAt = quote.quoteAt || now;
+    });
+    applyCryptoHoldingsTotal(user, month);
+    persistUser(user);
+    renderDashboard();
+    if (refreshModal && viewMonth === month && currentModal?.querySelector('#crypto-holding-form')) openCryptoModal();
+    const failedCount = Array.isArray(data.errors) ? data.errors.length : 0;
+    if (!silent) showToast(failedCount ? `已更新加密貨幣行情，${failedCount} 種暫時無報價` : '加密貨幣行情與匯率已更新');
+    return true;
+  } catch (error) {
+    console.error('Crypto quote refresh failed', error);
+    if (!silent) showToast('加密貨幣行情服務尚未部署，手動總額不受影響。');
+    return false;
+  } finally {
+    cryptoQuoteRequestInFlight = false;
+    const button = currentModal?.querySelector('#refresh-crypto-quotes');
+    if (button) { button.disabled = false; button.textContent = '更新價格'; }
+  }
+}
+
+function openCryptoModal(editId = null) {
+  const user = getUser();
+  const month = viewMonth;
+  const hadState = Boolean(user.cryptoByMonth?.[month]);
+  const state = cryptoState(user, month);
+  const holdings = state.holdings;
+  const editing = editId ? holdings.find(holding => holding.id === editId) : null;
+  const estimatedTotal = cryptoHoldingsTotal(user, month);
+  const modeIsHoldings = state.mode === 'holdings';
+  const isCurrentMonth = month === todayMonth();
+  const canRefreshQuotes = month >= todayMonth();
+  const assets = assetsForMonth(user, month);
+  if (!hadState) persistUser(user);
+  const rows = holdings.length ? holdings.map(holding => {
+    const updatedAt = quoteTimeText(holding.quoteAt);
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${cryptoAmount(holding.amount)} 枚 × US$ ${cryptoPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${cryptoQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(cryptoHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-crypto-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-crypto-holding="${holding.id}">刪除</button></div></article>`;
+  }).join('') : '<p class="tw-holding-empty">尚未加入加密貨幣。<br>輸入幣種代碼與持有數量後，系統會換算為台幣市值。</p>';
+  const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-crypto-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : '<span class="tw-snapshot-note">此月份幣價與匯率已凍結，不會套用今天行情</span>';
+  const summaryContent = modeIsHoldings
+    ? `<span>持幣估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>美元幣價已依保存的 USD/TWD 匯率換算</small>`
+    : `<form id="crypto-manual-total-form" class="tw-manual-total-form"><label for="crypto-manual-total">加密貨幣手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="crypto-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：200000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="crypto-manual-total-preview">目前使用手動總額 NT$ ${money(assets.crypto)}</small><div class="form-error" id="crypto-manual-total-error"></div></form>`;
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}加密貨幣資產</span><h2>加密貨幣資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="crypto-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持幣估值更新加密貨幣總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="crypto-holding-form" class="tw-holding-form"><h3>${editing ? '修改持幣' : '新增持幣'}</h3><div class="tw-form-grid"><div class="form-row"><label for="crypto-symbol">幣種代碼</label><input id="crypto-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：BTC" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="crypto-amount">持有數量</label><input id="crypto-amount" name="amount" type="number" value="${editing?.amount || ''}" placeholder="例如：0.05" min="0.00000001" step="any" required inputmode="decimal"></div></div><div class="form-error" id="crypto-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-crypto-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持幣' : '加入持幣'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '系統會自動取得美元幣價與 USD/TWD 匯率，再換算成台幣。' : '此月份尚未開始，先使用目前幣價與匯率預估；進入該月份後會再更新。' : '歷史月份會保留既有幣價與匯率；新增幣種時會沿用最近保存的資料。'}</p>`);
+  currentModal.querySelector('#refresh-crypto-quotes')?.addEventListener('click', () => refreshCryptoQuotes(null, { month }));
+  const manualTotalForm = currentModal.querySelector('#crypto-manual-total-form');
+  if (manualTotalForm) {
+    const input = manualTotalForm.querySelector('#crypto-manual-total');
+    const preview = manualTotalForm.querySelector('#crypto-manual-total-preview');
+    const errorHost = manualTotalForm.querySelector('#crypto-manual-total-error');
+    const updatePreview = () => {
+      errorHost.textContent = '';
+      if (!input.value.trim()) { preview.textContent = '可輸入 200000+5000 等算式'; return; }
+      const amount = calculateAmount(input.value);
+      preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
+    };
+    input.addEventListener('input', updatePreview);
+    manualTotalForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const amount = calculateAmount(input.value);
+      if (amount === null) {
+        errorHost.textContent = '請輸入可計算的非負金額。';
+        input.focus();
+        return;
+      }
+      const user = getUser();
+      const state = cryptoState(user, month);
+      const monthAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+      state.manualTotal = amount;
+      state.mode = 'manual';
+      monthAssets.crypto = amount;
+      syncLegacyCryptoData(user, month);
+      refreshMonthSnapshotTotal(user, month);
+      persistUser(user);
+      renderDashboard();
+      input.value = String(amount);
+      preview.textContent = `已儲存：NT$ ${money(amount)}`;
+      errorHost.textContent = '';
+      showToast('加密貨幣手動總額已更新');
+    });
+  }
+  currentModal.querySelector('#crypto-auto-mode').addEventListener('change', event => {
+    const user = getUser();
+    const state = cryptoState(user, month);
+    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    if (event.target.checked) {
+      state.manualTotal = Number(assets.crypto || 0);
+      state.mode = 'holdings';
+      applyCryptoHoldingsTotal(user, month);
+    } else {
+      state.mode = 'manual';
+      assets.crypto = Number(state.manualTotal || 0);
+      syncLegacyCryptoData(user, month);
+      refreshMonthSnapshotTotal(user, month);
+    }
+    persistUser(user);
+    renderDashboard();
+    openCryptoModal();
+    showToast(event.target.checked ? '已使用持幣估值更新加密貨幣總額' : '已切回手動加密貨幣總額');
+  });
+  currentModal.querySelectorAll('[data-edit-crypto-holding]').forEach(button => button.addEventListener('click', () => openCryptoModal(button.dataset.editCryptoHolding)));
+  currentModal.querySelectorAll('[data-delete-crypto-holding]').forEach(button => button.addEventListener('click', () => {
+    const user = getUser();
+    const state = cryptoState(user, month);
+    state.holdings = state.holdings.filter(holding => holding.id !== button.dataset.deleteCryptoHolding);
+    applyCryptoHoldingsTotal(user, month);
+    persistUser(user);
+    renderDashboard();
+    openCryptoModal();
+    showToast('加密貨幣持幣已刪除');
+  }));
+  currentModal.querySelector('#cancel-crypto-edit')?.addEventListener('click', () => openCryptoModal());
+  const holdingForm = currentModal.querySelector('#crypto-holding-form');
+  holdingForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = new FormData(holdingForm);
+    const symbol = normalizeCryptoSymbol(form.get('symbol'));
+    const amount = Number(form.get('amount'));
+    const errorHost = currentModal.querySelector('#crypto-holding-error');
+    if (!symbol) { errorHost.textContent = '請輸入正確的幣種代碼，例如 BTC、ETH 或 SOL。'; return; }
+    if (!Number.isFinite(amount) || amount <= 0) { errorHost.textContent = '持有數量請輸入大於 0 的數字。'; return; }
+    if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這個幣種已在持幣清單中。'; return; }
+    const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, exchangeRate: 0, priceSource: '', quoteAt: '' };
+    const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
+    const savedHolding = !canRefreshQuotes && (!editing || symbolChanged) ? nearestSavedCryptoHolding(user, symbol, month) : null;
+    holding.symbol = symbol;
+    holding.amount = amount;
+    if (!canRefreshQuotes && (!editing || symbolChanged)) {
+      holding.name = savedHolding?.name || symbol;
+      holding.price = Number(savedHolding?.price || 0);
+      holding.exchangeRate = Number(savedHolding?.exchangeRate || 0);
+      holding.priceSource = savedHolding ? 'snapshot' : '';
+      holding.quoteAt = savedHolding?.quoteAt || '';
+    } else if (canRefreshQuotes && symbolChanged) {
+      holding.name = symbol;
+      holding.price = 0;
+      holding.exchangeRate = 0;
+      holding.priceSource = '';
+      holding.quoteAt = '';
+    }
+    if (!editing) holdings.push(holding);
+    applyCryptoHoldingsTotal(user, month);
+    persistUser(user);
+    if (canRefreshQuotes) {
+      const refreshed = await refreshCryptoQuotes([holding.id], { month });
+      if (!refreshed) {
+        renderDashboard();
+        openCryptoModal();
+      }
+    } else {
+      renderDashboard();
+      openCryptoModal();
+      showToast(editing ? '加密貨幣持幣已更新' : savedHolding ? '持幣已加入，並沿用最近保存的價格與匯率' : '持幣已加入，尚無可沿用的歷史行情');
+    }
+  });
+  const staleHoldings = canRefreshQuotes ? holdings.filter(holding => holding.priceSource !== 'yahoo' || !holding.quoteAt || Date.now() - new Date(holding.quoteAt).getTime() > 5 * 60 * 1000) : [];
+  if (canRefreshQuotes && staleHoldings.length && Date.now() - cryptoAutoRefreshAttemptedAt > 60 * 1000) {
+    cryptoAutoRefreshAttemptedAt = Date.now();
+    window.setTimeout(() => refreshCryptoQuotes(staleHoldings.map(holding => holding.id), { silent: true, refreshModal: false, month }), 0);
+  }
+}
+
 function openAssetModal(key) {
   if (key === 'tw') { openTwStockModal(); return; }
   if (key === 'us') { openUsStockModal(); return; }
+  if (key === 'crypto') { openCryptoModal(); return; }
   openBasicAssetModal(key);
 }
 
@@ -1269,7 +1575,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=31').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=32').then(registration => registration.update());
 });
 
 async function startApp() {

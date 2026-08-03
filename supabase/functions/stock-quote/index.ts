@@ -18,6 +18,39 @@ const quoteTimestamp = (value: unknown) => {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 };
 
+const isoDate = (value: unknown) => {
+  const date = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+};
+
+const shiftIsoDate = (dateString: string, days: number) => {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+const historicalQuote = async (symbol: string, asOf: string, apiKey: string) => {
+  const url = new URL(`https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/${encodeURIComponent(symbol)}`);
+  url.searchParams.set('from', shiftIsoDate(asOf, -14));
+  url.searchParams.set('to', asOf);
+  url.searchParams.set('timeframe', 'D');
+  url.searchParams.set('fields', 'close');
+  url.searchParams.set('sort', 'desc');
+  const response = await fetch(url, { headers: { 'X-API-KEY': apiKey } });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+  const candle = (Array.isArray(data?.data) ? data.data : [])
+    .find((item: { date?: unknown; close?: unknown }) => String(item?.date || '').slice(0, 10) <= asOf && Number(item?.close) > 0);
+  const price = Number(candle?.close);
+  if (!Number.isFinite(price) || price <= 0) throw new Error('指定日期以前沒有可用收盤價');
+  const quoteDate = String(candle?.date || asOf).slice(0, 10);
+  return {
+    price,
+    quoteAt: new Date(`${quoteDate}T13:30:00+08:00`).toISOString(),
+    quoteDate,
+  };
+};
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -39,12 +72,15 @@ Deno.serve(async (request) => {
   const fugleApiKey = Deno.env.get('FUGLE_API_KEY');
   if (!fugleApiKey) return json({ error: '尚未設定 Fugle 行情金鑰' }, 503);
 
-  let payload: { items?: Array<{ symbol?: unknown; oddLot?: unknown }> };
+  let payload: { items?: Array<{ symbol?: unknown; oddLot?: unknown }>; asOf?: unknown };
   try {
     payload = await request.json();
   } catch {
     return json({ error: '請求內容格式錯誤' }, 400);
   }
+
+  const asOf = isoDate(payload.asOf);
+  if (payload.asOf && !asOf) return json({ error: '歷史日期格式錯誤' }, 400);
 
   const items = Array.isArray(payload.items) ? payload.items : [];
   const unique = new Map<string, boolean>();
@@ -56,6 +92,25 @@ Deno.serve(async (request) => {
   if (unique.size > 20) return json({ error: '一次最多更新 20 檔股票' }, 400);
 
   const results = await Promise.all([...unique].map(async ([symbol, oddLot]) => {
+    if (asOf) {
+      try {
+        const quote = await historicalQuote(symbol, asOf, fugleApiKey);
+        return {
+          quote: {
+            symbol,
+            name: symbol,
+            price: quote.price,
+            isClose: true,
+            quoteAt: quote.quoteAt,
+            quoteDate: quote.quoteDate,
+            historicalAsOf: asOf,
+            market: '',
+          },
+        };
+      } catch (error) {
+        return { error: { symbol, message: error instanceof Error ? error.message : '歷史報價查詢失敗' } };
+      }
+    }
     const url = new URL(`https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/${encodeURIComponent(symbol)}`);
     if (oddLot) url.searchParams.set('type', 'oddlot');
     try {

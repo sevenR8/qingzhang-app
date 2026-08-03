@@ -94,6 +94,8 @@ function normalizeTwStockState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
   if (!Array.isArray(normalized.holdings)) normalized.holdings = [];
   normalized.mode = normalized.mode === 'holdings' ? 'holdings' : 'manual';
+  normalized.holdingsCustomized = normalized.holdingsCustomized === true;
+  normalized.modeCustomized = normalized.modeCustomized === true;
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
@@ -130,23 +132,31 @@ function migrateLegacyTwStockData(user) {
 function twStockState(user, month = viewMonth, { create = true } = {}) {
   migrateLegacyTwStockData(user);
   let state = user.twStockByMonth[month];
+  const sourceMonth = Object.keys(user.twStockByMonth).filter(item => item < month).sort().pop();
+  const source = sourceMonth ? user.twStockByMonth[sourceMonth] : null;
+  let inherited = false;
   if (!state && create) {
-    const sourceMonth = Object.keys(user.twStockByMonth).filter(item => item < month).sort().pop();
-    const source = sourceMonth ? user.twStockByMonth[sourceMonth] : null;
     const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
     state = normalizeTwStockState({
       holdings: cloneTwHoldings(source?.holdings),
       mode: source?.mode || 'manual',
-      manualTotal: Number(monthlyAssets?.tw || 0)
+      manualTotal: Number(monthlyAssets?.tw || 0),
+      inheritedFrom: sourceMonth || ''
     }, monthlyAssets?.tw);
     user.twStockByMonth[month] = state;
-    if (state.mode === 'holdings') {
-      const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
-      assets.tw = Math.round(state.holdings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0));
-      refreshMonthSnapshotTotal(user, month);
-    }
+    inherited = true;
+  } else if (state && create && !state.holdings?.length && state.holdingsCustomized !== true && source?.holdings?.length) {
+    state.holdings = cloneTwHoldings(source.holdings);
+    if (state.modeCustomized !== true) state.mode = source.mode || 'manual';
+    state.inheritedFrom = sourceMonth;
+    inherited = true;
   }
   if (state) state = normalizeTwStockState(state, month === todayMonth() ? user.assets?.tw : monthSnapshot(user, month)?.assets?.tw);
+  if (inherited && state?.mode === 'holdings') {
+    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    assets.tw = Math.round(state.holdings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0));
+    refreshMonthSnapshotTotal(user, month);
+  }
   syncLegacyTwStockData(user, month);
   return state;
 }
@@ -175,6 +185,8 @@ function normalizeUsStockState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
   if (!Array.isArray(normalized.holdings)) normalized.holdings = [];
   normalized.mode = normalized.mode === 'holdings' ? 'holdings' : 'manual';
+  normalized.holdingsCustomized = normalized.holdingsCustomized === true;
+  normalized.modeCustomized = normalized.modeCustomized === true;
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
@@ -211,23 +223,31 @@ function migrateLegacyUsStockData(user) {
 function usStockState(user, month = viewMonth, { create = true } = {}) {
   migrateLegacyUsStockData(user);
   let state = user.usStockByMonth[month];
+  const sourceMonth = Object.keys(user.usStockByMonth).filter(item => item < month).sort().pop();
+  const source = sourceMonth ? user.usStockByMonth[sourceMonth] : null;
+  let inherited = false;
   if (!state && create) {
-    const sourceMonth = Object.keys(user.usStockByMonth).filter(item => item < month).sort().pop();
-    const source = sourceMonth ? user.usStockByMonth[sourceMonth] : null;
     const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
     state = normalizeUsStockState({
       holdings: cloneUsHoldings(source?.holdings),
       mode: source?.mode || 'manual',
-      manualTotal: Number(monthlyAssets?.us || 0)
+      manualTotal: Number(monthlyAssets?.us || 0),
+      inheritedFrom: sourceMonth || ''
     }, monthlyAssets?.us);
     user.usStockByMonth[month] = state;
-    if (state.mode === 'holdings') {
-      const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
-      assets.us = Math.round(state.holdings.reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0));
-      refreshMonthSnapshotTotal(user, month);
-    }
+    inherited = true;
+  } else if (state && create && !state.holdings?.length && state.holdingsCustomized !== true && source?.holdings?.length) {
+    state.holdings = cloneUsHoldings(source.holdings);
+    if (state.modeCustomized !== true) state.mode = source.mode || 'manual';
+    state.inheritedFrom = sourceMonth;
+    inherited = true;
   }
   if (state) state = normalizeUsStockState(state, month === todayMonth() ? user.assets?.us : monthSnapshot(user, month)?.assets?.us);
+  if (inherited && state?.mode === 'holdings') {
+    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    assets.us = Math.round(state.holdings.reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0));
+    refreshMonthSnapshotTotal(user, month);
+  }
   syncLegacyUsStockData(user, month);
   return state;
 }
@@ -256,6 +276,8 @@ function normalizeCryptoState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
   if (!Array.isArray(normalized.holdings)) normalized.holdings = [];
   normalized.mode = normalized.mode === 'holdings' ? 'holdings' : 'manual';
+  normalized.holdingsCustomized = normalized.holdingsCustomized === true;
+  normalized.modeCustomized = normalized.modeCustomized === true;
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
@@ -292,23 +314,31 @@ function migrateLegacyCryptoData(user) {
 function cryptoState(user, month = viewMonth, { create = true } = {}) {
   migrateLegacyCryptoData(user);
   let state = user.cryptoByMonth[month];
+  const sourceMonth = Object.keys(user.cryptoByMonth).filter(item => item < month).sort().pop();
+  const source = sourceMonth ? user.cryptoByMonth[sourceMonth] : null;
+  let inherited = false;
   if (!state && create) {
-    const sourceMonth = Object.keys(user.cryptoByMonth).filter(item => item < month).sort().pop();
-    const source = sourceMonth ? user.cryptoByMonth[sourceMonth] : null;
     const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
     state = normalizeCryptoState({
       holdings: cloneCryptoHoldings(source?.holdings),
       mode: source?.mode || 'manual',
-      manualTotal: Number(monthlyAssets?.crypto || 0)
+      manualTotal: Number(monthlyAssets?.crypto || 0),
+      inheritedFrom: sourceMonth || ''
     }, monthlyAssets?.crypto);
     user.cryptoByMonth[month] = state;
-    if (state.mode === 'holdings') {
-      const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
-      assets.crypto = Math.round(state.holdings.reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0));
-      refreshMonthSnapshotTotal(user, month);
-    }
+    inherited = true;
+  } else if (state && create && !state.holdings?.length && state.holdingsCustomized !== true && source?.holdings?.length) {
+    state.holdings = cloneCryptoHoldings(source.holdings);
+    if (state.modeCustomized !== true) state.mode = source.mode || 'manual';
+    state.inheritedFrom = sourceMonth;
+    inherited = true;
   }
   if (state) state = normalizeCryptoState(state, month === todayMonth() ? user.assets?.crypto : monthSnapshot(user, month)?.assets?.crypto);
+  if (inherited && state?.mode === 'holdings') {
+    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    assets.crypto = Math.round(state.holdings.reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0));
+    refreshMonthSnapshotTotal(user, month);
+  }
   syncLegacyCryptoData(user, month);
   return state;
 }
@@ -900,16 +930,15 @@ function bindMobileMonthSwipe() {
 function selectViewMonth(month) {
   viewMonth = month;
   const user = getUser();
-  const hadCashState = Boolean(user?.cashByMonth?.[month]);
-  const hadTwState = Boolean(user?.twStockByMonth?.[month]);
-  const hadUsState = Boolean(user?.usStockByMonth?.[month]);
   if (user) {
     cashState(user, month);
     twStockState(user, month);
     applyTwHoldingsTotal(user, month);
     usStockState(user, month);
     applyUsHoldingsTotal(user, month);
-    if (!hadCashState || !hadTwState || !hadUsState) persistUser(user);
+    cryptoState(user, month);
+    applyCryptoHoldingsTotal(user, month);
+    persistUser(user);
   }
   renderDashboard();
 }
@@ -1049,7 +1078,6 @@ async function refreshTwHoldingQuotes(ids = null, { silent = false, refreshModal
 function openTwStockModal(editId = null) {
   const user = getUser();
   const month = viewMonth;
-  const hadState = Boolean(user.twStockByMonth?.[month]);
   const state = twStockState(user, month);
   const holdings = state.holdings;
   const editing = editId ? holdings.find(holding => holding.id === editId) : null;
@@ -1058,7 +1086,7 @@ function openTwStockModal(editId = null) {
   const isCurrentMonth = month === todayMonth();
   const canRefreshQuotes = month >= todayMonth();
   const assets = assetsForMonth(user, month);
-  if (!hadState) persistUser(user);
+  persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
     return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · ${twQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(holdingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
@@ -1094,6 +1122,7 @@ function openTwStockModal(editId = null) {
       const monthAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
       state.manualTotal = amount;
       state.mode = 'manual';
+      state.modeCustomized = true;
       monthAssets.tw = amount;
       syncLegacyTwStockData(user, month);
       refreshMonthSnapshotTotal(user, month);
@@ -1109,6 +1138,7 @@ function openTwStockModal(editId = null) {
     const user = getUser();
     const state = twStockState(user, month);
     const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    state.modeCustomized = true;
     if (event.target.checked) {
       state.manualTotal = Number(assets.tw || 0);
       state.mode = 'holdings';
@@ -1129,6 +1159,7 @@ function openTwStockModal(editId = null) {
     const user = getUser();
     const state = twStockState(user, month);
     state.holdings = state.holdings.filter(holding => holding.id !== button.dataset.deleteTwHolding);
+    state.holdingsCustomized = true;
     applyTwHoldingsTotal(user, month);
     persistUser(user);
     renderDashboard();
@@ -1167,6 +1198,7 @@ function openTwStockModal(editId = null) {
       holding.quoteAt = '';
     }
     if (!editing) holdings.push(holding);
+    state.holdingsCustomized = true;
     applyTwHoldingsTotal(user, month);
     persistUser(user);
     if (canRefreshQuotes) {
@@ -1255,7 +1287,6 @@ async function refreshUsHoldingQuotes(ids = null, { silent = false, refreshModal
 function openUsStockModal(editId = null) {
   const user = getUser();
   const month = viewMonth;
-  const hadState = Boolean(user.usStockByMonth?.[month]);
   const state = usStockState(user, month);
   const holdings = state.holdings;
   const editing = editId ? holdings.find(holding => holding.id === editId) : null;
@@ -1264,7 +1295,7 @@ function openUsStockModal(editId = null) {
   const isCurrentMonth = month === todayMonth();
   const canRefreshQuotes = month >= todayMonth();
   const assets = assetsForMonth(user, month);
-  if (!hadState) persistUser(user);
+  persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
     return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-us-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
@@ -1300,6 +1331,7 @@ function openUsStockModal(editId = null) {
       const monthAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
       state.manualTotal = amount;
       state.mode = 'manual';
+      state.modeCustomized = true;
       monthAssets.us = amount;
       syncLegacyUsStockData(user, month);
       refreshMonthSnapshotTotal(user, month);
@@ -1315,6 +1347,7 @@ function openUsStockModal(editId = null) {
     const user = getUser();
     const state = usStockState(user, month);
     const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    state.modeCustomized = true;
     if (event.target.checked) {
       state.manualTotal = Number(assets.us || 0);
       state.mode = 'holdings';
@@ -1335,6 +1368,7 @@ function openUsStockModal(editId = null) {
     const user = getUser();
     const state = usStockState(user, month);
     state.holdings = state.holdings.filter(holding => holding.id !== button.dataset.deleteUsHolding);
+    state.holdingsCustomized = true;
     applyUsHoldingsTotal(user, month);
     persistUser(user);
     renderDashboard();
@@ -1371,6 +1405,7 @@ function openUsStockModal(editId = null) {
       holding.quoteAt = '';
     }
     if (!editing) holdings.push(holding);
+    state.holdingsCustomized = true;
     applyUsHoldingsTotal(user, month);
     persistUser(user);
     if (canRefreshQuotes) {
@@ -1458,7 +1493,6 @@ async function refreshCryptoQuotes(ids = null, { silent = false, refreshModal = 
 function openCryptoModal(editId = null) {
   const user = getUser();
   const month = viewMonth;
-  const hadState = Boolean(user.cryptoByMonth?.[month]);
   const state = cryptoState(user, month);
   const holdings = state.holdings;
   const editing = editId ? holdings.find(holding => holding.id === editId) : null;
@@ -1467,7 +1501,7 @@ function openCryptoModal(editId = null) {
   const isCurrentMonth = month === todayMonth();
   const canRefreshQuotes = month >= todayMonth();
   const assets = assetsForMonth(user, month);
-  if (!hadState) persistUser(user);
+  persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
     return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${cryptoAmount(holding.amount)} 枚 × US$ ${cryptoPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${cryptoQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(cryptoHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-crypto-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-crypto-holding="${holding.id}">刪除</button></div></article>`;
@@ -1503,6 +1537,7 @@ function openCryptoModal(editId = null) {
       const monthAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
       state.manualTotal = amount;
       state.mode = 'manual';
+      state.modeCustomized = true;
       monthAssets.crypto = amount;
       syncLegacyCryptoData(user, month);
       refreshMonthSnapshotTotal(user, month);
@@ -1518,6 +1553,7 @@ function openCryptoModal(editId = null) {
     const user = getUser();
     const state = cryptoState(user, month);
     const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    state.modeCustomized = true;
     if (event.target.checked) {
       state.manualTotal = Number(assets.crypto || 0);
       state.mode = 'holdings';
@@ -1538,6 +1574,7 @@ function openCryptoModal(editId = null) {
     const user = getUser();
     const state = cryptoState(user, month);
     state.holdings = state.holdings.filter(holding => holding.id !== button.dataset.deleteCryptoHolding);
+    state.holdingsCustomized = true;
     applyCryptoHoldingsTotal(user, month);
     persistUser(user);
     renderDashboard();
@@ -1574,6 +1611,7 @@ function openCryptoModal(editId = null) {
       holding.quoteAt = '';
     }
     if (!editing) holdings.push(holding);
+    state.holdingsCustomized = true;
     applyCryptoHoldingsTotal(user, month);
     persistUser(user);
     if (canRefreshQuotes) {
@@ -1785,7 +1823,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=38').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=39').then(registration => registration.update());
 });
 
 async function startApp() {

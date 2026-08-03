@@ -358,8 +358,8 @@ function renderDashboard() {
           <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月</p></div><button class="text-button" id="add-expense-button">＋ 新增</button></div>
           <section class="expense-card" id="expenses">${renderExpenses(viewedFixedExpenses)}</section>
           <div class="section-heading"><div><h2>本月開銷</h2><p>${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}</p></div><button class="text-button" id="add-monthly-expense-button">＋ 記一筆</button></div>
-          <section class="card-payment-card"><div><span>本月信用卡應繳</span><small>${monthText(previousMonth(viewMonth))}信用卡消費 · ${viewMonth}-25 繳納</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></section>
           <section class="expense-card" id="monthly-expenses">${renderMonthlyExpenses(thisMonthExpenses)}</section>
+          <section class="card-payment-card"><div><span>本月信用卡應繳</span><small>${monthText(previousMonth(viewMonth))}信用卡消費 · ${viewMonth}-25 繳納</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></section>
           <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div><div class="ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong><small>本月現金 NT$ ${money(viewedAssets.cash)} － 總開銷 NT$ ${money(actualMonthlyOutgoings)}</small></div></section>
         </section>
       </div>
@@ -599,7 +599,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=23').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=24').then(registration => registration.update());
 });
 
 async function startApp() {

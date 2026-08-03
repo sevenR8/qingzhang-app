@@ -49,6 +49,9 @@ function normalizeUser(user) {
   user.expenses ||= [];
   user.history ||= [];
   promoteScheduledMonthData(user);
+  user.cashMode ||= 'manual';
+  if (!Number.isFinite(Number(user.cashManualTotal))) user.cashManualTotal = Number(user.assets.cash || 0);
+  migrateLegacyCashData(user);
   user.twHoldings ||= [];
   user.twStockMode ||= 'manual';
   if (!Number.isFinite(Number(user.twManualTotal))) user.twManualTotal = Number(user.assets.tw || 0);
@@ -322,6 +325,59 @@ function nearestSavedCryptoHolding(user, symbol, month = viewMonth) {
   const following = candidates.filter(item => item.savedMonth > month).sort((a, b) => a.savedMonth.localeCompare(b.savedMonth))[0];
   return (previous || following)?.holding || null;
 }
+function normalizeCashMode(mode) {
+  return ['manual', 'income', 'ending'].includes(mode) ? mode : 'manual';
+}
+function normalizeCashState(state, fallbackManualTotal = 0) {
+  const normalized = state && typeof state === 'object' ? state : {};
+  normalized.mode = normalizeCashMode(normalized.mode);
+  if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
+  return normalized;
+}
+function syncLegacyCashData(user, month = todayMonth()) {
+  if (month !== todayMonth()) return;
+  const state = user.cashByMonth?.[month];
+  if (!state) return;
+  user.cashMode = state.mode;
+  user.cashManualTotal = state.manualTotal;
+}
+function migrateLegacyCashData(user) {
+  if (!user.cashByMonth || typeof user.cashByMonth !== 'object' || Array.isArray(user.cashByMonth)) user.cashByMonth = {};
+  const currentMonth = todayMonth();
+  const currentState = user.cashByMonth[currentMonth];
+  const shouldMigrateLegacy = !currentState || Number(user.cashDataVersion || 0) < 1;
+  if (shouldMigrateLegacy) {
+    user.cashByMonth[currentMonth] = normalizeCashState({
+      mode: user.cashMode,
+      manualTotal: user.cashManualTotal
+    }, user.assets?.cash);
+  }
+  Object.entries(user.cashByMonth).forEach(([month, state]) => {
+    const monthlyAssets = month === currentMonth ? user.assets : monthSnapshot(user, month)?.assets;
+    user.cashByMonth[month] = normalizeCashState(state, monthlyAssets?.cash);
+  });
+  const activeState = user.cashByMonth[currentMonth];
+  if (activeState.mode === 'manual') user.assets.cash = Number(activeState.manualTotal || 0);
+  user.cashDataVersion = 1;
+  syncLegacyCashData(user, currentMonth);
+}
+function cashState(user, month = viewMonth, { create = true } = {}) {
+  migrateLegacyCashData(user);
+  let state = user.cashByMonth[month];
+  if (!state && create) {
+    const sourceMonth = Object.keys(user.cashByMonth).filter(item => item < month).sort().pop();
+    const source = sourceMonth ? user.cashByMonth[sourceMonth] : null;
+    const monthlyAssets = rawAssetsForMonth(user, month);
+    state = normalizeCashState({
+      mode: source?.mode || 'manual',
+      manualTotal: Number(monthlyAssets?.cash ?? source?.manualTotal ?? 0)
+    }, monthlyAssets?.cash);
+    user.cashByMonth[month] = state;
+  }
+  if (state) state = normalizeCashState(state, rawAssetsForMonth(user, month)?.cash);
+  syncLegacyCashData(user, month);
+  return state;
+}
 function quoteTimeText(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -404,9 +460,12 @@ function refreshMonthSnapshotTotal(user, month) {
   const snapshot = monthSnapshot(user, month);
   if (snapshot) snapshot.total = totalAssets(user, month);
 }
-function assetsForMonth(user, month = viewMonth) {
+function rawAssetsForMonth(user, month = viewMonth) {
   if (month === todayMonth()) return user.assets;
   return monthSnapshot(user, month)?.assets || emptyAssets();
+}
+function assetsForMonth(user, month = viewMonth) {
+  return { ...rawAssetsForMonth(user, month), cash: cashValueForMonth(user, month) };
 }
 function fixedExpensesForMonth(user, month = viewMonth) {
   if (month === todayMonth()) return user.expenses;
@@ -431,7 +490,43 @@ function fixedExpenseTotal(user, month = viewMonth) { return fixedExpensesForMon
 function cashExpenseTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'cash').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
 function creditCardSpendTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'card').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
 function creditCardPaymentDue(user, month = viewMonth) { return creditCardSpendTotal(user, previousMonth(month)); }
-function totalAssets(user, month = viewMonth) { return grossAssets(user, month) - cashExpenseTotal(user, month) - creditCardPaymentDue(user, month) - fixedExpenseTotal(user, month); }
+function incomeTotalForMonth(user, month = viewMonth) {
+  const income = incomeForMonth(user, month);
+  return Number(income.salary || 0) + Number(income.other || 0);
+}
+function actualMonthlyOutgoingsForMonth(user, month = viewMonth) {
+  return cashExpenseTotal(user, month) + creditCardPaymentDue(user, month) + fixedExpenseTotal(user, month);
+}
+function cashValueForMonth(user, month = viewMonth, visited = new Set()) {
+  const state = cashState(user, month);
+  if (!state || state.mode === 'manual') return Number(state?.manualTotal ?? rawAssetsForMonth(user, month)?.cash ?? 0);
+  if (visited.has(month)) return Number(state.manualTotal || 0);
+  const nextVisited = new Set(visited);
+  nextVisited.add(month);
+  const previousEnding = endingCashForMonth(user, previousMonth(month), nextVisited);
+  const availableCash = previousEnding + incomeTotalForMonth(user, month);
+  return state.mode === 'ending' ? availableCash - actualMonthlyOutgoingsForMonth(user, month) : availableCash;
+}
+function endingCashForMonth(user, month = viewMonth, visited = new Set()) {
+  const cash = cashValueForMonth(user, month, visited);
+  return cashState(user, month)?.mode === 'ending' ? cash : cash - actualMonthlyOutgoingsForMonth(user, month);
+}
+function cashFormulaParts(user, month = viewMonth) {
+  return {
+    previousEnding: endingCashForMonth(user, previousMonth(month)),
+    income: incomeTotalForMonth(user, month),
+    outgoings: actualMonthlyOutgoingsForMonth(user, month)
+  };
+}
+function totalAssets(user, month = viewMonth) {
+  const gross = grossAssets(user, month);
+  return cashState(user, month)?.mode === 'ending' ? gross : gross - actualMonthlyOutgoingsForMonth(user, month);
+}
+function refreshAllSnapshotTotals(user) {
+  user.history.forEach(snapshot => {
+    if (snapshot.assets) snapshot.total = totalAssets(user, snapshot.month);
+  });
+}
 function previousMonth(month = todayMonth()) { const [year, mon] = month.split('-').map(Number); const date = new Date(year, mon - 2, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
 function monthlyChange(user, currentTotal, month = viewMonth) {
   const previous = monthSnapshot(user, previousMonth(month));
@@ -450,6 +545,10 @@ function defaultUser(name, email) {
     expenses: [],
     incomes: {},
     monthlyExpenses: [],
+    cashMode: 'manual',
+    cashManualTotal: 0,
+    cashByMonth: {},
+    cashDataVersion: 0,
     twHoldings: [],
     twStockMode: 'manual',
     twManualTotal: 0,
@@ -473,6 +572,7 @@ function defaultUser(name, email) {
 
 function persistUser(user) {
   activeUser = normalizeUser(user);
+  refreshAllSnapshotTotals(activeUser);
   cacheBook(activeUser);
   window.clearTimeout(cloudSyncTimer);
   cloudSyncTimer = window.setTimeout(() => syncBookToCloud(), 350);
@@ -484,6 +584,10 @@ function bookPayload(user) {
     expenses: user.expenses,
     incomes: user.incomes,
     monthlyExpenses: user.monthlyExpenses,
+    cashMode: user.cashMode,
+    cashManualTotal: user.cashManualTotal,
+    cashByMonth: user.cashByMonth,
+    cashDataVersion: user.cashDataVersion,
     twHoldings: user.twHoldings,
     twStockMode: user.twStockMode,
     twManualTotal: user.twManualTotal,
@@ -638,6 +742,7 @@ async function handleAuth(event, mode) {
 function renderDashboard() {
   const user = getUser();
   if (!user) { renderAuth(); return; }
+  refreshAllSnapshotTotals(user);
   const total = totalAssets(user, viewMonth);
   const fixedExpenses = fixedExpenseTotal(user, viewMonth);
   const viewedAssets = assetsForMonth(user, viewMonth);
@@ -650,7 +755,12 @@ function renderDashboard() {
   const cardPaymentDue = creditCardPaymentDue(user, viewMonth);
   const actualMonthlyOutgoings = fixedExpenses + cashExpenses + cardPaymentDue;
   const monthlyBalance = thisMonthIncomeTotal - actualMonthlyOutgoings;
-  const endingCash = Number(viewedAssets.cash || 0) - actualMonthlyOutgoings;
+  const endingCash = endingCashForMonth(user, viewMonth);
+  const viewedCashState = cashState(user, viewMonth);
+  const cashParts = cashFormulaParts(user, viewMonth);
+  const endingCashFormula = viewedCashState.mode === 'manual'
+    ? `本月現金 NT$ ${money(viewedAssets.cash)} － 總開銷 NT$ ${money(actualMonthlyOutgoings)}`
+    : `上月末期現金 NT$ ${money(cashParts.previousEnding)} ＋ 本月收入 NT$ ${money(cashParts.income)} － 總開銷 NT$ ${money(cashParts.outgoings)}`;
   const comparison = monthlyChange(user, total, viewMonth);
   const selectedSnapshot = monthSnapshot(user, viewMonth);
   const hasSnapshotDetails = Boolean(selectedSnapshot?.assets);
@@ -685,7 +795,7 @@ function renderDashboard() {
           <div class="section-heading"><div><h2>本月開銷</h2><p>${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}</p></div><button class="text-button" id="add-monthly-expense-button">＋ 記一筆</button></div>
           <section class="expense-card" id="monthly-expenses">${renderMonthlyExpenses(thisMonthExpenses)}</section>
           <section class="card-payment-card"><div><span>本月信用卡應繳</span><small>${monthText(previousMonth(viewMonth))}信用卡消費 · ${viewMonth}-25 繳納</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></section>
-          <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div><div class="ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong><small>本月現金 NT$ ${money(viewedAssets.cash)} － 總開銷 NT$ ${money(actualMonthlyOutgoings)}</small></div></section>
+          <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div><div class="ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong><small>${endingCashFormula}</small></div></section>
         </section>
       </div>
     </main>
@@ -772,14 +882,16 @@ function bindDashboard() {
 function selectViewMonth(month) {
   viewMonth = month;
   const user = getUser();
+  const hadCashState = Boolean(user?.cashByMonth?.[month]);
   const hadTwState = Boolean(user?.twStockByMonth?.[month]);
   const hadUsState = Boolean(user?.usStockByMonth?.[month]);
   if (user) {
+    cashState(user, month);
     twStockState(user, month);
     applyTwHoldingsTotal(user, month);
     usStockState(user, month);
     applyUsHoldingsTotal(user, month);
-    if (!hadTwState || !hadUsState) persistUser(user);
+    if (!hadCashState || !hadTwState || !hadUsState) persistUser(user);
   }
   renderDashboard();
 }
@@ -1465,7 +1577,76 @@ function openCryptoModal(editId = null) {
   }
 }
 
+function openCashModal() {
+  const user = getUser();
+  const month = viewMonth;
+  const hadState = Boolean(user.cashByMonth?.[month]);
+  const state = cashState(user, month);
+  const cash = cashValueForMonth(user, month);
+  const endingCash = endingCashForMonth(user, month);
+  const parts = cashFormulaParts(user, month);
+  if (!hadState) persistUser(user);
+  const summaryContent = state.mode === 'manual'
+    ? `<form id="cash-manual-form" class="tw-manual-total-form"><label for="cash-manual-total">現金手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="cash-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：200000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="cash-manual-preview">目前使用手動現金 NT$ ${money(cash)}；扣除開銷後末期現金 NT$ ${money(endingCash)}</small><div class="form-error" id="cash-manual-error"></div></form>`
+    : state.mode === 'income'
+      ? `<span>上月末期現金＋本月收入</span><strong>${cash >= 0 ? '' : '−'} NT$ ${money(Math.abs(cash))}</strong><small>NT$ ${money(parts.previousEnding)} ＋ NT$ ${money(parts.income)}；扣除開銷後末期現金 NT$ ${money(endingCash)}</small>`
+      : `<span>自動計算本月末期現金</span><strong>${cash >= 0 ? '' : '−'} NT$ ${money(Math.abs(cash))}</strong><small>NT$ ${money(parts.previousEnding)} ＋ NT$ ${money(parts.income)} － NT$ ${money(parts.outgoings)}</small>`;
+  const modes = [
+    { value: 'manual', title: '手動填寫現金', description: '自行輸入本月現金，總資產會再扣除本月全部開銷。' },
+    { value: 'income', title: '上月末期現金＋本月收入', description: '顯示本月可用現金；全部開銷會由總資產另外扣除。' },
+    { value: 'ending', title: '上月末期現金＋本月收入－全部開銷', description: '直接顯示本月末期現金；總資產不會重複扣除開銷。' }
+  ];
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}現金資產</span><h2>現金計算方式</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary cash-summary">${summaryContent}</section><div class="cash-mode-list" role="radiogroup" aria-label="現金計算方式">${modes.map(mode => `<label class="tw-auto-switch cash-mode-option"><input type="radio" name="cash-mode" value="${mode.value}" ${state.mode === mode.value ? 'checked' : ''}><span><b>${mode.title}</b><small>${mode.description}</small></span></label>`).join('')}</div><p class="form-note tw-disclaimer">自動模式會依每個月份的收入、固定開銷、現金開銷及信用卡應繳金額即時更新。</p>`);
+  const manualForm = currentModal.querySelector('#cash-manual-form');
+  if (manualForm) {
+    const input = manualForm.querySelector('#cash-manual-total');
+    const preview = manualForm.querySelector('#cash-manual-preview');
+    const errorHost = manualForm.querySelector('#cash-manual-error');
+    const updatePreview = () => {
+      errorHost.textContent = '';
+      if (!input.value.trim()) { preview.textContent = '可輸入 200000+5000 等算式'; return; }
+      const amount = calculateAmount(input.value);
+      preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
+    };
+    input.addEventListener('input', updatePreview);
+    manualForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const amount = calculateAmount(input.value);
+      if (amount === null) {
+        errorHost.textContent = '請輸入可計算的非負金額。';
+        input.focus();
+        return;
+      }
+      const user = getUser();
+      const state = cashState(user, month);
+      const rawAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+      state.manualTotal = amount;
+      state.mode = 'manual';
+      rawAssets.cash = amount;
+      syncLegacyCashData(user, month);
+      persistUser(user);
+      renderDashboard();
+      openCashModal();
+      showToast('現金手動總額已更新');
+    });
+  }
+  currentModal.querySelectorAll('input[name="cash-mode"]').forEach(input => input.addEventListener('change', event => {
+    if (!event.target.checked) return;
+    const user = getUser();
+    const state = cashState(user, month);
+    const rawAssets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    state.mode = normalizeCashMode(event.target.value);
+    if (state.mode === 'manual') rawAssets.cash = Number(state.manualTotal || 0);
+    syncLegacyCashData(user, month);
+    persistUser(user);
+    renderDashboard();
+    openCashModal();
+    showToast(state.mode === 'manual' ? '已切回手動現金' : state.mode === 'income' ? '已使用上月末期現金加本月收入' : '已自動計算本月末期現金');
+  }));
+}
+
 function openAssetModal(key) {
+  if (key === 'cash') { openCashModal(); return; }
   if (key === 'tw') { openTwStockModal(); return; }
   if (key === 'us') { openUsStockModal(); return; }
   if (key === 'crypto') { openCryptoModal(); return; }
@@ -1499,7 +1680,11 @@ function openBasicAssetModal(key) {
 function openAssetsModal() {
   const user = getUser();
   const assets = assetsForMonth(user, viewMonth), gross = grossAssets(user, viewMonth), cashExpenses = cashExpenseTotal(user, viewMonth), cardDue = creditCardPaymentDue(user, viewMonth), cardSpending = creditCardSpendTotal(user, viewMonth), fixed = fixedExpenseTotal(user, viewMonth), total = totalAssets(user, viewMonth);
-  openModal(`<header class="modal-header"><div><span class="eyebrow">資產明細</span><h2>${monthText(viewMonth)}資產配置</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><ul class="history-list">${Object.entries(assetMeta).map(([key, meta]) => `<li><span>${meta.icon}　${meta.label}</span><strong>NT$ ${money(assets[key])}</strong></li>`).join('')}<li><span>資產合計</span><strong>NT$ ${money(gross)}</strong></li><li><span>－ 本月現金開銷</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>－ 本月信用卡應繳（${monthText(previousMonth(viewMonth))}）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>－ 固定開銷</span><strong>NT$ ${money(fixed)}</strong></li><li><span><b>總資產</b></span><strong>NT$ ${money(total)}</strong></li></ul><p class="form-note">本月刷卡 NT$ ${money(cardSpending)} 會在下個月 25 日從總資產扣除。</p><div class="modal-actions"><button class="button primary" data-close-modal>完成</button></div>`);
+  const cashIncludesOutgoings = cashState(user, viewMonth)?.mode === 'ending';
+  const outgoingsRows = cashIncludesOutgoings
+    ? `<li><span>本月現金開銷（已含於末期現金）</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>本月信用卡應繳（已含於末期現金）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>固定開銷（已含於末期現金）</span><strong>NT$ ${money(fixed)}</strong></li>`
+    : `<li><span>－ 本月現金開銷</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>－ 本月信用卡應繳（${monthText(previousMonth(viewMonth))}）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>－ 固定開銷</span><strong>NT$ ${money(fixed)}</strong></li>`;
+  openModal(`<header class="modal-header"><div><span class="eyebrow">資產明細</span><h2>${monthText(viewMonth)}資產配置</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><ul class="history-list">${Object.entries(assetMeta).map(([key, meta]) => `<li><span>${meta.icon}　${meta.label}</span><strong>NT$ ${money(assets[key])}</strong></li>`).join('')}<li><span>資產合計</span><strong>NT$ ${money(gross)}</strong></li>${outgoingsRows}<li><span><b>總資產</b></span><strong>NT$ ${money(total)}</strong></li></ul><p class="form-note">${cashIncludesOutgoings ? '目前現金採用自動末期現金，開銷不會從總資產重複扣除。' : `本月刷卡 NT$ ${money(cardSpending)} 會在下個月 25 日從總資產扣除。`}</p><div class="modal-actions"><button class="button primary" data-close-modal>完成</button></div>`);
 }
 
 function openSnapshotModal() {
@@ -1575,7 +1760,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=32').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=33').then(registration => registration.update());
 });
 
 async function startApp() {

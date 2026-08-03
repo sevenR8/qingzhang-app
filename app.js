@@ -520,7 +520,7 @@ function cashFormulaParts(user, month = viewMonth) {
 }
 function totalAssets(user, month = viewMonth) {
   const gross = grossAssets(user, month);
-  return cashState(user, month)?.mode === 'ending' ? gross : gross - actualMonthlyOutgoingsForMonth(user, month);
+  return cashState(user, month)?.mode === 'manual' ? gross - actualMonthlyOutgoingsForMonth(user, month) : gross;
 }
 function refreshAllSnapshotTotals(user) {
   user.history.forEach(snapshot => {
@@ -1589,11 +1589,11 @@ function openCashModal() {
   const summaryContent = state.mode === 'manual'
     ? `<form id="cash-manual-form" class="tw-manual-total-form"><label for="cash-manual-total">現金手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="cash-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：200000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="cash-manual-preview">目前使用手動現金 NT$ ${money(cash)}；扣除開銷後末期現金 NT$ ${money(endingCash)}</small><div class="form-error" id="cash-manual-error"></div></form>`
     : state.mode === 'income'
-      ? `<span>上月末期現金＋本月收入</span><strong>${cash >= 0 ? '' : '−'} NT$ ${money(Math.abs(cash))}</strong><small>NT$ ${money(parts.previousEnding)} ＋ NT$ ${money(parts.income)}；扣除開銷後末期現金 NT$ ${money(endingCash)}</small>`
+      ? `<span>上月末期現金＋本月收入（未扣除開銷）</span><strong>${cash >= 0 ? '' : '−'} NT$ ${money(Math.abs(cash))}</strong><small>NT$ ${money(parts.previousEnding)} ＋ NT$ ${money(parts.income)}；目前總資產顯示滿額狀態</small>`
       : `<span>自動計算本月末期現金</span><strong>${cash >= 0 ? '' : '−'} NT$ ${money(Math.abs(cash))}</strong><small>NT$ ${money(parts.previousEnding)} ＋ NT$ ${money(parts.income)} － NT$ ${money(parts.outgoings)}</small>`;
   const modes = [
     { value: 'manual', title: '手動填寫現金', description: '自行輸入本月現金，總資產會再扣除本月全部開銷。' },
-    { value: 'income', title: '上月末期現金＋本月收入', description: '顯示本月可用現金；全部開銷會由總資產另外扣除。' },
+    { value: 'income', title: '上月末期現金＋本月收入（未扣除開銷）', description: '顯示剛領完收入的滿額現金與總資產，全部開銷暫不扣除。' },
     { value: 'ending', title: '上月末期現金＋本月收入－全部開銷', description: '直接顯示本月末期現金；總資產不會重複扣除開銷。' }
   ];
   openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}現金資產</span><h2>現金計算方式</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary cash-summary">${summaryContent}</section><div class="cash-mode-list" role="radiogroup" aria-label="現金計算方式">${modes.map(mode => `<label class="tw-auto-switch cash-mode-option"><input type="radio" name="cash-mode" value="${mode.value}" ${state.mode === mode.value ? 'checked' : ''}><span><b>${mode.title}</b><small>${mode.description}</small></span></label>`).join('')}</div><p class="form-note tw-disclaimer">自動模式會依每個月份的收入、固定開銷、現金開銷及信用卡應繳金額即時更新。</p>`);
@@ -1680,11 +1680,18 @@ function openBasicAssetModal(key) {
 function openAssetsModal() {
   const user = getUser();
   const assets = assetsForMonth(user, viewMonth), gross = grossAssets(user, viewMonth), cashExpenses = cashExpenseTotal(user, viewMonth), cardDue = creditCardPaymentDue(user, viewMonth), cardSpending = creditCardSpendTotal(user, viewMonth), fixed = fixedExpenseTotal(user, viewMonth), total = totalAssets(user, viewMonth);
-  const cashIncludesOutgoings = cashState(user, viewMonth)?.mode === 'ending';
-  const outgoingsRows = cashIncludesOutgoings
+  const currentCashMode = cashState(user, viewMonth)?.mode;
+  const outgoingsRows = currentCashMode === 'ending'
     ? `<li><span>本月現金開銷（已含於末期現金）</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>本月信用卡應繳（已含於末期現金）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>固定開銷（已含於末期現金）</span><strong>NT$ ${money(fixed)}</strong></li>`
-    : `<li><span>－ 本月現金開銷</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>－ 本月信用卡應繳（${monthText(previousMonth(viewMonth))}）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>－ 固定開銷</span><strong>NT$ ${money(fixed)}</strong></li>`;
-  openModal(`<header class="modal-header"><div><span class="eyebrow">資產明細</span><h2>${monthText(viewMonth)}資產配置</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><ul class="history-list">${Object.entries(assetMeta).map(([key, meta]) => `<li><span>${meta.icon}　${meta.label}</span><strong>NT$ ${money(assets[key])}</strong></li>`).join('')}<li><span>資產合計</span><strong>NT$ ${money(gross)}</strong></li>${outgoingsRows}<li><span><b>總資產</b></span><strong>NT$ ${money(total)}</strong></li></ul><p class="form-note">${cashIncludesOutgoings ? '目前現金採用自動末期現金，開銷不會從總資產重複扣除。' : `本月刷卡 NT$ ${money(cardSpending)} 會在下個月 25 日從總資產扣除。`}</p><div class="modal-actions"><button class="button primary" data-close-modal>完成</button></div>`);
+    : currentCashMode === 'income'
+      ? `<li><span>本月現金開銷（滿額狀態尚未扣除）</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>本月信用卡應繳（滿額狀態尚未扣除）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>固定開銷（滿額狀態尚未扣除）</span><strong>NT$ ${money(fixed)}</strong></li>`
+      : `<li><span>－ 本月現金開銷</span><strong>NT$ ${money(cashExpenses)}</strong></li><li><span>－ 本月信用卡應繳（${monthText(previousMonth(viewMonth))}）</span><strong>NT$ ${money(cardDue)}</strong></li><li><span>－ 固定開銷</span><strong>NT$ ${money(fixed)}</strong></li>`;
+  const totalNote = currentCashMode === 'ending'
+    ? '目前現金採用自動末期現金，開銷不會從總資產重複扣除。'
+    : currentCashMode === 'income'
+      ? '目前顯示剛領完收入的滿額總資產，所有開銷皆尚未扣除。'
+      : `本月刷卡 NT$ ${money(cardSpending)} 會在下個月 25 日從總資產扣除。`;
+  openModal(`<header class="modal-header"><div><span class="eyebrow">資產明細</span><h2>${monthText(viewMonth)}資產配置</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><ul class="history-list">${Object.entries(assetMeta).map(([key, meta]) => `<li><span>${meta.icon}　${meta.label}</span><strong>NT$ ${money(assets[key])}</strong></li>`).join('')}<li><span>資產合計</span><strong>NT$ ${money(gross)}</strong></li>${outgoingsRows}<li><span><b>總資產</b></span><strong>NT$ ${money(total)}</strong></li></ul><p class="form-note">${totalNote}</p><div class="modal-actions"><button class="button primary" data-close-modal>完成</button></div>`);
 }
 
 function openSnapshotModal() {
@@ -1760,7 +1767,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=33').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=34').then(registration => registration.update());
 });
 
 async function startApp() {

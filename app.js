@@ -859,6 +859,7 @@ function drawChart(history) {
 
 function bindDashboard() {
   bindFixedExpenseSorting();
+  bindMobileMonthSwipe();
   document.querySelectorAll('[data-month-shift]').forEach(button => button.addEventListener('click', () => selectViewMonth(shiftMonth(viewMonth, Number(button.dataset.monthShift)))));
   document.querySelectorAll('.view-month-input').forEach(input => input.addEventListener('change', event => { if (event.target.value) selectViewMonth(event.target.value); }));
   document.querySelector('#logout-button').addEventListener('click', openAccountModal);
@@ -872,6 +873,28 @@ function bindDashboard() {
   document.querySelectorAll('[data-monthly-expense]').forEach(button => button.addEventListener('click', () => openMonthlyExpenseModal(button.dataset.monthlyExpense)));
   document.querySelector('#mobile-history').addEventListener('click', () => document.querySelector('.chart-card').scrollIntoView({ behavior: 'smooth', block: 'center' }));
   document.querySelector('#mobile-expense').addEventListener('click', () => document.querySelector('#monthly-expenses').scrollIntoView({ behavior: 'smooth', block: 'center' }));
+}
+
+function bindMobileMonthSwipe() {
+  const shell = document.querySelector('.app-shell');
+  if (!shell) return;
+  let swipe = null;
+  shell.addEventListener('pointerdown', event => {
+    if (!window.matchMedia('(max-width: 699px)').matches || event.isPrimary === false || event.button !== 0) return;
+    if (event.target.closest('button, input, select, textarea, label, .drag-handle')) return;
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now() };
+  });
+  shell.addEventListener('pointerup', event => {
+    if (!swipe || event.pointerId !== swipe.id) return;
+    const dx = event.clientX - swipe.x;
+    const dy = event.clientY - swipe.y;
+    const elapsed = Date.now() - swipe.time;
+    swipe = null;
+    if (elapsed > 1200 || Math.abs(dx) < 65 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
+    event.preventDefault();
+    selectViewMonth(shiftMonth(viewMonth, dx < 0 ? 1 : -1));
+  });
+  shell.addEventListener('pointercancel', () => { swipe = null; });
 }
 
 function selectViewMonth(month) {
@@ -1762,7 +1785,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=37').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=38').then(registration => registration.update());
 });
 
 async function startApp() {

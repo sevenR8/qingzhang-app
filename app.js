@@ -36,7 +36,6 @@ let marketQuoteRefreshInFlight = false;
 let lastMarketQuoteRefreshAt = 0;
 let marketQuoteRefreshGeneration = 0;
 let monthPageDirection = 0;
-let monthSwipeHintTimer;
 const MARKET_QUOTE_REFRESH_MS = 5 * 60 * 1000;
 
 function getLegacyUsers() {
@@ -805,7 +804,7 @@ function renderDashboard() {
   const comparison = monthlyChange(user, total, viewMonth);
   const chartHistory = user.history.filter(item => item.month <= todayMonth());
   const monthPageClass = monthPageDirection > 0 ? 'month-page-next' : monthPageDirection < 0 ? 'month-page-previous' : '';
-  const monthSwitchClass = monthPageDirection ? 'month-switcher-flash' : '';
+  const monthDateClass = monthPageDirection ? 'month-date-flash' : '';
   app.innerHTML = `
     <main class="app-shell ${monthPageClass}">
       <header class="topbar">
@@ -817,9 +816,9 @@ function renderDashboard() {
         <div class="total-number">$ ${money(total)}</div>
         <span class="currency-label">TWD</span>
         <div class="overview-ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong></div>
-        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
+        <div class="overview-bottom"><div class="overview-meta"><span class="date-chip ${monthDateClass}">${monthText(viewMonth)}（${periodRangeText(viewMonth)}）</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
-      <section class="month-switcher compact mobile-month-switcher ${monthSwitchClass}" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
+      <section class="month-switcher compact mobile-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
       <div class="dashboard-grid">
         <section>
           <div class="section-heading"><div><h2>資產配置</h2><p>點選卡片，更新目前總價</p></div><button class="text-button" id="asset-summary-button">查看明細</button></div>
@@ -829,7 +828,7 @@ function renderDashboard() {
           <section class="chart-card"><div class="chart-header"><div><h3>總資產變化</h3><span>${chartHistory.length > 1 ? `已追蹤 ${chartHistory.length} 個月份` : '同步本月資產後，會顯示走勢'}</span></div><span class="chart-caption">NT$ 100K / 格</span></div><div id="asset-chart" class="chart-wrap"></div></section>
         </section>
         <section>
-          <section class="month-switcher compact desktop-month-switcher ${monthSwitchClass}" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
+          <section class="month-switcher compact desktop-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
           <div class="section-heading"><div><h2>本月收入</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}</p></div><button class="text-button" id="edit-income-button">更新收入</button></div>
           <section class="income-card" id="income">${renderIncome(thisMonthIncome, thisMonthIncomeTotal)}</section>
           <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月</p></div><button class="text-button" id="add-expense-button">＋ 新增</button></div>
@@ -933,17 +932,7 @@ function bindMobileMonthSwipe() {
   shell.addEventListener('pointerdown', event => {
     if (!window.matchMedia('(max-width: 699px)').matches || event.isPrimary === false || event.button !== 0) return;
     if (event.target.closest('button, input, select, textarea, label, .drag-handle')) return;
-    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), direction: 0 };
-  });
-  shell.addEventListener('pointermove', event => {
-    if (!swipe || event.pointerId !== swipe.id) return;
-    const dx = event.clientX - swipe.x;
-    const dy = event.clientY - swipe.y;
-    const direction = Math.abs(dx) >= 28 && Math.abs(dx) > Math.abs(dy) * 1.15 ? (dx < 0 ? 1 : -1) : 0;
-    if (direction === swipe.direction) return;
-    swipe.direction = direction;
-    if (direction) showMonthSwipeHint(direction);
-    else hideMonthSwipeHint();
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now() };
   });
   shell.addEventListener('pointerup', event => {
     if (!swipe || event.pointerId !== swipe.id) return;
@@ -951,42 +940,12 @@ function bindMobileMonthSwipe() {
     const dy = event.clientY - swipe.y;
     const elapsed = Date.now() - swipe.time;
     swipe = null;
-    if (elapsed > 1200 || Math.abs(dx) < 65 || Math.abs(dx) < Math.abs(dy) * 1.25) { hideMonthSwipeHint(); return; }
+    if (elapsed > 1200 || Math.abs(dx) < 65 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
     event.preventDefault();
     const direction = dx < 0 ? 1 : -1;
-    confirmMonthSwipeHint();
     selectViewMonth(shiftMonth(viewMonth, direction), { direction });
   });
-  shell.addEventListener('pointercancel', () => { swipe = null; hideMonthSwipeHint(); });
-}
-
-function showMonthSwipeHint(direction) {
-  window.clearTimeout(monthSwipeHintTimer);
-  let hint = document.querySelector('.month-swipe-hint');
-  if (!hint) {
-    hint = document.createElement('div');
-    hint.className = 'month-swipe-hint';
-    hint.setAttribute('role', 'status');
-    hint.setAttribute('aria-live', 'polite');
-    document.body.append(hint);
-  }
-  const targetMonth = shiftMonth(viewMonth, direction);
-  hint.className = `month-swipe-hint visible ${direction > 0 ? 'next' : 'previous'}`;
-  hint.innerHTML = `<span>${direction > 0 ? '›' : '‹'}</span><div><small>${direction > 0 ? '下個月' : '上個月'}</small><strong>${monthText(targetMonth)}</strong></div>`;
-}
-
-function hideMonthSwipeHint(delay = 0) {
-  window.clearTimeout(monthSwipeHintTimer);
-  const hint = document.querySelector('.month-swipe-hint');
-  if (!hint) return;
-  if (!delay) { hint.remove(); return; }
-  monthSwipeHintTimer = window.setTimeout(() => hint.remove(), delay);
-}
-
-function confirmMonthSwipeHint() {
-  const hint = document.querySelector('.month-swipe-hint');
-  if (hint) hint.classList.add('confirmed');
-  hideMonthSwipeHint(650);
+  shell.addEventListener('pointercancel', () => { swipe = null; });
 }
 
 function selectViewMonth(month, { direction = 0 } = {}) {
@@ -1989,7 +1948,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=44').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=45').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

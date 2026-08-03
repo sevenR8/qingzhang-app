@@ -8,7 +8,7 @@ const STORAGE = {
 };
 
 const assetMeta = {
-  cash: { label: '現金', icon: '⌁', className: 'cash' },
+  cash: { label: '現金', icon: '現', className: 'cash' },
   tw: { label: '台股', icon: '台', className: 'tw' },
   us: { label: '美股', icon: '＄', className: 'us' },
   crypto: { label: '加密貨幣', icon: '₿', className: 'crypto' }
@@ -1762,7 +1762,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=35').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=36').then(registration => registration.update());
 });
 
 async function startApp() {

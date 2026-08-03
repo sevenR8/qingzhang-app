@@ -773,6 +773,7 @@ function renderDashboard() {
         <div class="overview-ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong></div>
         <div class="overview-bottom"><div class="overview-meta"><span class="date-chip">檢視：${monthText(viewMonth)}（${periodRangeText(viewMonth)}）${hasSnapshotDetails ? '' : ' · 尚未同步'}</span><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
+      <section class="month-switcher compact mobile-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
       <div class="dashboard-grid">
         <section>
           <div class="section-heading"><div><h2>資產配置</h2><p>點選卡片，更新目前總價</p></div><button class="text-button" id="asset-summary-button">查看明細</button></div>
@@ -782,7 +783,7 @@ function renderDashboard() {
           <section class="chart-card"><div class="chart-header"><div><h3>總資產變化</h3><span>${chartHistory.length > 1 ? `已追蹤 ${chartHistory.length} 個月份` : '同步本月資產後，會顯示走勢'}</span></div><span class="chart-caption">NT$ 100K / 格</span></div><div id="asset-chart" class="chart-wrap"></div></section>
         </section>
         <section>
-          <section class="month-switcher compact" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" id="previous-month" aria-label="上個月">‹</button><input id="view-month" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" id="next-month" aria-label="下個月">›</button></div></section>
+          <section class="month-switcher compact desktop-month-switcher" aria-label="選擇查看月份"><div><span>查看月份</span><small>${periodRangeText(viewMonth)} 記帳區間</small></div><div class="month-controls"><button class="month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><input class="view-month-input" type="month" value="${viewMonth}" aria-label="查看月份"><button class="month-arrow" data-month-shift="1" aria-label="下個月">›</button></div></section>
           <div class="section-heading"><div><h2>本月收入</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}</p></div><button class="text-button" id="edit-income-button">更新收入</button></div>
           <section class="income-card" id="income">${renderIncome(thisMonthIncome, thisMonthIncomeTotal)}</section>
           <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月</p></div><button class="text-button" id="add-expense-button">＋ 新增</button></div>
@@ -858,9 +859,8 @@ function drawChart(history) {
 
 function bindDashboard() {
   bindFixedExpenseSorting();
-  document.querySelector('#previous-month').addEventListener('click', () => selectViewMonth(shiftMonth(viewMonth, -1)));
-  document.querySelector('#next-month').addEventListener('click', () => selectViewMonth(shiftMonth(viewMonth, 1)));
-  document.querySelector('#view-month').addEventListener('change', event => { if (event.target.value) selectViewMonth(event.target.value); });
+  document.querySelectorAll('[data-month-shift]').forEach(button => button.addEventListener('click', () => selectViewMonth(shiftMonth(viewMonth, Number(button.dataset.monthShift)))));
+  document.querySelectorAll('.view-month-input').forEach(input => input.addEventListener('change', event => { if (event.target.value) selectViewMonth(event.target.value); }));
   document.querySelector('#logout-button').addEventListener('click', openAccountModal);
   document.querySelector('#history-button').addEventListener('click', openHistoryModal);
   document.querySelector('#asset-summary-button').addEventListener('click', openAssetsModal);
@@ -1762,7 +1762,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=36').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=37').then(registration => registration.update());
 });
 
 async function startApp() {

@@ -15,14 +15,15 @@ const assetMeta = {
 };
 
 const expenseIcons = ['⌂', '◒', '⌁', '⌁', '◉'];
+const DEFAULT_PERIOD_START_DAY = 5;
 const app = document.querySelector('#app');
 const supabaseClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
 });
 let currentModal = null;
 let toastTimer;
-let viewMonth = todayMonth();
 let activeUser = null;
+let viewMonth = todayMonth();
 let cloudSyncTimer;
 let twQuoteRequestInFlight = false;
 let twAutoRefreshAttemptedAt = 0;
@@ -50,6 +51,7 @@ function getCachedBook(userId) {
 function cacheBook(user) { if (user?.id) localStorage.setItem(cacheKey(user.id), JSON.stringify(user)); }
 function normalizeUser(user) {
   if (!user) return null;
+  user.periodStartDay = normalizePeriodStartDay(user.periodStartDay);
   user.incomes ||= {};
   user.monthlyExpenses ||= [];
   user.assets ||= emptyAssets();
@@ -75,13 +77,19 @@ function normalizeUser(user) {
 }
 function getUser() { return normalizeUser(activeUser); }
 function localDateISO() { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
-function periodMonthForDate(dateString) {
+function normalizePeriodStartDay(value) {
+  const day = Math.trunc(Number(value));
+  return day >= 1 && day <= 28 ? day : DEFAULT_PERIOD_START_DAY;
+}
+function periodStartDay(user = activeUser) { return normalizePeriodStartDay(user?.periodStartDay); }
+function periodMonthForDate(dateString, startDay = periodStartDay()) {
   const [year, month, day] = String(dateString).split('-').map(Number);
-  const date = new Date(year, month - 1, day < 5 ? 1 : 5);
-  if (day < 5) date.setMonth(date.getMonth() - 1);
+  const normalizedStartDay = normalizePeriodStartDay(startDay);
+  const date = new Date(year, month - 1, 1);
+  if (day < normalizedStartDay) date.setMonth(date.getMonth() - 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
-function todayMonth() { return periodMonthForDate(localDateISO()); }
+function todayMonth(user = activeUser) { return periodMonthForDate(localDateISO(), periodStartDay(user)); }
 function todayDate() { return localDateISO(); }
 function money(value) { return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(Number(value || 0)); }
 function inputAmount(value) { return Number(value || 0) === 0 ? '' : String(Number(value)); }
@@ -106,8 +114,8 @@ function normalizeTwStockState(state, fallbackManualTotal = 0) {
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
-function syncLegacyTwStockData(user, month = todayMonth()) {
-  if (month !== todayMonth()) return;
+function syncLegacyTwStockData(user, month = todayMonth(user)) {
+  if (month !== todayMonth(user)) return;
   const state = user.twStockByMonth?.[month];
   if (!state) return;
   user.twHoldings = state.holdings;
@@ -116,7 +124,7 @@ function syncLegacyTwStockData(user, month = todayMonth()) {
 }
 function migrateLegacyTwStockData(user) {
   if (!user.twStockByMonth || typeof user.twStockByMonth !== 'object' || Array.isArray(user.twStockByMonth)) user.twStockByMonth = {};
-  const currentMonth = todayMonth();
+  const currentMonth = todayMonth(user);
   const currentState = user.twStockByMonth[currentMonth];
   const shouldMigrateLegacy = !currentState || Number(user.twStockDataVersion || 0) < 1;
   if (shouldMigrateLegacy) {
@@ -143,7 +151,7 @@ function twStockState(user, month = viewMonth, { create = true } = {}) {
   const source = sourceMonth ? user.twStockByMonth[sourceMonth] : null;
   let inherited = false;
   if (!state && create) {
-    const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
+    const monthlyAssets = month === todayMonth(user) ? user.assets : monthSnapshot(user, month)?.assets;
     state = normalizeTwStockState({
       holdings: cloneTwHoldings(source?.holdings),
       mode: source?.mode || 'manual',
@@ -158,9 +166,9 @@ function twStockState(user, month = viewMonth, { create = true } = {}) {
     state.inheritedFrom = sourceMonth;
     inherited = true;
   }
-  if (state) state = normalizeTwStockState(state, month === todayMonth() ? user.assets?.tw : monthSnapshot(user, month)?.assets?.tw);
+  if (state) state = normalizeTwStockState(state, month === todayMonth(user) ? user.assets?.tw : monthSnapshot(user, month)?.assets?.tw);
   if (inherited && state?.mode === 'holdings') {
-    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    const assets = month === todayMonth(user) ? user.assets : ensureMonthSnapshot(user, month).assets;
     assets.tw = Math.round(state.holdings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0));
     refreshMonthSnapshotTotal(user, month);
   }
@@ -197,8 +205,8 @@ function normalizeUsStockState(state, fallbackManualTotal = 0) {
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
-function syncLegacyUsStockData(user, month = todayMonth()) {
-  if (month !== todayMonth()) return;
+function syncLegacyUsStockData(user, month = todayMonth(user)) {
+  if (month !== todayMonth(user)) return;
   const state = user.usStockByMonth?.[month];
   if (!state) return;
   user.usHoldings = state.holdings;
@@ -207,7 +215,7 @@ function syncLegacyUsStockData(user, month = todayMonth()) {
 }
 function migrateLegacyUsStockData(user) {
   if (!user.usStockByMonth || typeof user.usStockByMonth !== 'object' || Array.isArray(user.usStockByMonth)) user.usStockByMonth = {};
-  const currentMonth = todayMonth();
+  const currentMonth = todayMonth(user);
   const currentState = user.usStockByMonth[currentMonth];
   const shouldMigrateLegacy = !currentState || Number(user.usStockDataVersion || 0) < 1;
   if (shouldMigrateLegacy) {
@@ -234,7 +242,7 @@ function usStockState(user, month = viewMonth, { create = true } = {}) {
   const source = sourceMonth ? user.usStockByMonth[sourceMonth] : null;
   let inherited = false;
   if (!state && create) {
-    const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
+    const monthlyAssets = month === todayMonth(user) ? user.assets : monthSnapshot(user, month)?.assets;
     state = normalizeUsStockState({
       holdings: cloneUsHoldings(source?.holdings),
       mode: source?.mode || 'manual',
@@ -249,9 +257,9 @@ function usStockState(user, month = viewMonth, { create = true } = {}) {
     state.inheritedFrom = sourceMonth;
     inherited = true;
   }
-  if (state) state = normalizeUsStockState(state, month === todayMonth() ? user.assets?.us : monthSnapshot(user, month)?.assets?.us);
+  if (state) state = normalizeUsStockState(state, month === todayMonth(user) ? user.assets?.us : monthSnapshot(user, month)?.assets?.us);
   if (inherited && state?.mode === 'holdings') {
-    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    const assets = month === todayMonth(user) ? user.assets : ensureMonthSnapshot(user, month).assets;
     assets.us = Math.round(state.holdings.reduce((sum, holding) => sum + usHoldingMarketValue(holding), 0));
     refreshMonthSnapshotTotal(user, month);
   }
@@ -288,8 +296,8 @@ function normalizeCryptoState(state, fallbackManualTotal = 0) {
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
-function syncLegacyCryptoData(user, month = todayMonth()) {
-  if (month !== todayMonth()) return;
+function syncLegacyCryptoData(user, month = todayMonth(user)) {
+  if (month !== todayMonth(user)) return;
   const state = user.cryptoByMonth?.[month];
   if (!state) return;
   user.cryptoHoldings = state.holdings;
@@ -298,7 +306,7 @@ function syncLegacyCryptoData(user, month = todayMonth()) {
 }
 function migrateLegacyCryptoData(user) {
   if (!user.cryptoByMonth || typeof user.cryptoByMonth !== 'object' || Array.isArray(user.cryptoByMonth)) user.cryptoByMonth = {};
-  const currentMonth = todayMonth();
+  const currentMonth = todayMonth(user);
   const currentState = user.cryptoByMonth[currentMonth];
   const shouldMigrateLegacy = !currentState || Number(user.cryptoDataVersion || 0) < 1;
   if (shouldMigrateLegacy) {
@@ -325,7 +333,7 @@ function cryptoState(user, month = viewMonth, { create = true } = {}) {
   const source = sourceMonth ? user.cryptoByMonth[sourceMonth] : null;
   let inherited = false;
   if (!state && create) {
-    const monthlyAssets = month === todayMonth() ? user.assets : monthSnapshot(user, month)?.assets;
+    const monthlyAssets = month === todayMonth(user) ? user.assets : monthSnapshot(user, month)?.assets;
     state = normalizeCryptoState({
       holdings: cloneCryptoHoldings(source?.holdings),
       mode: source?.mode || 'manual',
@@ -340,9 +348,9 @@ function cryptoState(user, month = viewMonth, { create = true } = {}) {
     state.inheritedFrom = sourceMonth;
     inherited = true;
   }
-  if (state) state = normalizeCryptoState(state, month === todayMonth() ? user.assets?.crypto : monthSnapshot(user, month)?.assets?.crypto);
+  if (state) state = normalizeCryptoState(state, month === todayMonth(user) ? user.assets?.crypto : monthSnapshot(user, month)?.assets?.crypto);
   if (inherited && state?.mode === 'holdings') {
-    const assets = month === todayMonth() ? user.assets : ensureMonthSnapshot(user, month).assets;
+    const assets = month === todayMonth(user) ? user.assets : ensureMonthSnapshot(user, month).assets;
     assets.crypto = Math.round(state.holdings.reduce((sum, holding) => sum + cryptoHoldingMarketValue(holding), 0));
     refreshMonthSnapshotTotal(user, month);
   }
@@ -371,8 +379,8 @@ function normalizeCashState(state, fallbackManualTotal = 0) {
   if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
   return normalized;
 }
-function syncLegacyCashData(user, month = todayMonth()) {
-  if (month !== todayMonth()) return;
+function syncLegacyCashData(user, month = todayMonth(user)) {
+  if (month !== todayMonth(user)) return;
   const state = user.cashByMonth?.[month];
   if (!state) return;
   user.cashMode = state.mode;
@@ -380,7 +388,7 @@ function syncLegacyCashData(user, month = todayMonth()) {
 }
 function migrateLegacyCashData(user) {
   if (!user.cashByMonth || typeof user.cashByMonth !== 'object' || Array.isArray(user.cashByMonth)) user.cashByMonth = {};
-  const currentMonth = todayMonth();
+  const currentMonth = todayMonth(user);
   const currentState = user.cashByMonth[currentMonth];
   const shouldMigrateLegacy = !currentState || Number(user.cashDataVersion || 0) < 1;
   if (shouldMigrateLegacy) {
@@ -455,10 +463,15 @@ function amountFromForm(form, field) {
   return result;
 }
 function monthText(month) { const [year, mon] = month.split('-'); return `${year} 年 ${Number(mon)} 月`; }
-function periodRangeText(month) { const [year, mon] = month.split('-').map(Number); const end = new Date(year, mon, 4); return `${mon}/5 - ${end.getMonth() + 1}/4`; }
-function periodEndDate(month) {
+function periodRangeText(month, user = activeUser) {
   const [year, mon] = month.split('-').map(Number);
-  const end = new Date(year, mon, 4);
+  const startDay = periodStartDay(user);
+  const end = new Date(year, mon, startDay - 1);
+  return `${mon}/${startDay} - ${end.getMonth() + 1}/${end.getDate()}`;
+}
+function periodEndDate(month, user = activeUser) {
+  const [year, mon] = month.split('-').map(Number);
+  const end = new Date(year, mon, periodStartDay(user) - 1);
   return `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
 }
 function dateText(date) { const [, month, day] = date.split('-'); return `${Number(month)}/${Number(day)}`; }
@@ -468,7 +481,7 @@ function emptyAssets() { return { cash: 0, tw: 0, us: 0, crypto: 0 }; }
 function monthSnapshot(user, month = viewMonth) { return user.history.find(item => item.month === month); }
 function cloneFixedExpenses(expenses) { return expenses.map(item => ({ ...item })); }
 function promoteScheduledMonthData(user) {
-  const currentMonth = todayMonth();
+  const currentMonth = todayMonth(user);
   if (!user.activeAssetMonth) { user.activeAssetMonth = currentMonth; return; }
   if (user.activeAssetMonth === currentMonth) return;
   const scheduled = user.history.find(item => item.month === currentMonth);
@@ -477,7 +490,7 @@ function promoteScheduledMonthData(user) {
   user.activeAssetMonth = currentMonth;
 }
 function carriedAssetsForFutureMonth(user, month) {
-  let sourceMonth = todayMonth();
+  let sourceMonth = todayMonth(user);
   let sourceAssets = user.assets;
   user.history.forEach(item => {
     if (item.assets && item.month > sourceMonth && item.month < month) {
@@ -490,7 +503,7 @@ function carriedAssetsForFutureMonth(user, month) {
 function ensureMonthSnapshot(user, month = viewMonth) {
   let snapshot = monthSnapshot(user, month);
   if (!snapshot) {
-    const assets = month === todayMonth() ? { ...user.assets } : month > todayMonth() ? carriedAssetsForFutureMonth(user, month) : emptyAssets();
+    const assets = month === todayMonth(user) ? { ...user.assets } : month > todayMonth(user) ? carriedAssetsForFutureMonth(user, month) : emptyAssets();
     snapshot = { month, total: 0, assets, fixedExpenses: cloneFixedExpenses(user.expenses) };
     user.history.push(snapshot);
   }
@@ -503,14 +516,14 @@ function refreshMonthSnapshotTotal(user, month) {
   if (snapshot) snapshot.total = totalAssets(user, month);
 }
 function rawAssetsForMonth(user, month = viewMonth) {
-  if (month === todayMonth()) return user.assets;
+  if (month === todayMonth(user)) return user.assets;
   return monthSnapshot(user, month)?.assets || emptyAssets();
 }
 function assetsForMonth(user, month = viewMonth) {
   return { ...rawAssetsForMonth(user, month), cash: cashValueForMonth(user, month) };
 }
 function fixedExpensesForMonth(user, month = viewMonth) {
-  if (month === todayMonth()) return user.expenses;
+  if (month === todayMonth(user)) return user.expenses;
   return monthSnapshot(user, month)?.fixedExpenses || user.expenses;
 }
 function hasManualExpenseOrder(expenses) { return expenses.some(expense => Number.isFinite(Number(expense.sortOrder))); }
@@ -526,8 +539,8 @@ function orderedFixedExpenses(expenses) {
   });
 }
 function grossAssets(user, month = viewMonth) { return Object.values(assetsForMonth(user, month)).reduce((total, amount) => total + Number(amount || 0), 0); }
-function incomeForMonth(user, month = todayMonth()) { return { salary: 0, other: 0, otherNote: '', ...(user.incomes[month] || {}) }; }
-function expensesForMonth(user, month = todayMonth()) { return user.monthlyExpenses.filter(item => item.date && periodMonthForDate(item.date) === month); }
+function incomeForMonth(user, month = todayMonth(user)) { return { salary: 0, other: 0, otherNote: '', ...(user.incomes[month] || {}) }; }
+function expensesForMonth(user, month = todayMonth(user)) { return user.monthlyExpenses.filter(item => item.date && periodMonthForDate(item.date, periodStartDay(user)) === month); }
 function fixedExpenseTotal(user, month = viewMonth) { return fixedExpensesForMonth(user, month).reduce((sum, item) => sum + Number(item.amount || 0), 0); }
 function cashExpenseTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'cash').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
 function creditCardSpendTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'card').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
@@ -583,6 +596,7 @@ function shiftMonth(month, amount) { const [year, mon] = month.split('-').map(Nu
 function defaultUser(name, email) {
   return {
     name, email,
+    periodStartDay: DEFAULT_PERIOD_START_DAY,
     assets: { cash: 0, tw: 0, us: 0, crypto: 0 },
     expenses: [],
     incomes: {},
@@ -622,6 +636,7 @@ function persistUser(user) {
 
 function bookPayload(user) {
   return {
+    periodStartDay: user.periodStartDay,
     assets: user.assets,
     expenses: user.expenses,
     incomes: user.incomes,
@@ -694,6 +709,7 @@ async function loadCloudBook(authUser) {
     const cached = getCachedBook(authUser.id);
     if (cached) {
       activeUser = normalizeUser(cached);
+      viewMonth = todayMonth(activeUser);
       renderDashboard();
       startMarketQuoteUpdates();
       showToast('目前離線，顯示此裝置的暫存資料。');
@@ -703,6 +719,7 @@ async function loadCloudBook(authUser) {
     return;
   }
   activeUser = makeUserFromCloud(authUser, data);
+  viewMonth = todayMonth(activeUser);
   cacheBook(activeUser);
   if (!data) await syncBookToCloud({ quiet: true });
   renderDashboard();
@@ -809,14 +826,14 @@ function renderDashboard() {
     <main class="app-shell ${monthPageClass}">
       <header class="topbar">
         <div class="brand" aria-label="青"><span class="brand-mark">青</span></div>
-        <div class="user-menu"><span class="avatar">${escapeHTML(initials(user.name))}</span><button class="icon-button" id="logout-button" aria-label="登出">⋯</button></div>
+        <div class="user-menu"><span class="avatar">${escapeHTML(initials(user.name))}</span><button class="icon-button" id="settings-button" aria-label="開啟設定">⋯</button></div>
       </header>
       <section class="overview">
         <p class="overview-label">我的總資產</p>
         <div class="total-number">$ ${money(total)}</div>
         <span class="currency-label">TWD</span>
         <div class="overview-ending-cash"><span>本月期末現金</span><strong>${endingCash >= 0 ? '' : '−'} NT$ ${money(Math.abs(endingCash))}</strong></div>
-        <div class="overview-bottom"><div class="overview-meta"><div class="date-chip overview-month-control ${monthDateClass}" aria-label="切換查看月份"><button class="overview-month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><label class="overview-month-label"><span>${monthText(viewMonth)}（${periodRangeText(viewMonth)}）</span><input class="view-month-input" type="month" value="${viewMonth}" aria-label="選擇查看月份"></label><button class="overview-month-arrow" data-month-shift="1" aria-label="下個月">›</button></div><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
+        <div class="overview-bottom"><div class="overview-meta"><div class="date-chip overview-month-control ${monthDateClass}" aria-label="切換查看月份"><button class="overview-month-arrow" data-month-shift="-1" aria-label="上個月">‹</button><label class="overview-month-label"><span>${monthText(viewMonth)}（${periodRangeText(viewMonth, user)}）</span><input class="view-month-input" type="month" value="${viewMonth}" aria-label="選擇查看月份"></label><button class="overview-month-arrow" data-month-shift="1" aria-label="下個月">›</button></div><span class="change-chip ${comparison.className}">${comparison.label}</span></div></div>
       </section>
       <div class="dashboard-grid">
         <section>
@@ -909,7 +926,7 @@ function bindDashboard() {
     selectViewMonth(shiftMonth(viewMonth, direction), { direction });
   }));
   document.querySelectorAll('.view-month-input').forEach(input => input.addEventListener('change', event => { if (event.target.value) selectViewMonth(event.target.value); }));
-  document.querySelector('#logout-button').addEventListener('click', openAccountModal);
+  document.querySelector('#settings-button').addEventListener('click', openAccountModal);
   document.querySelector('#history-button').addEventListener('click', openHistoryModal);
   document.querySelector('#asset-summary-button').addEventListener('click', openAssetsModal);
   document.querySelector('#edit-income-button').addEventListener('click', openIncomeModal);
@@ -1923,16 +1940,33 @@ function openExpenseModal(id) {
 
 function openMonthlyExpenseModal(id) {
   const user = getUser(); const expense = id ? user.monthlyExpenses.find(item => item.id === id) : null;
-  const defaultDate = viewMonth === todayMonth() ? todayDate() : `${viewMonth}-05`;
+  const defaultDate = viewMonth === todayMonth(user) ? todayDate() : `${viewMonth}-${String(periodStartDay(user)).padStart(2, '0')}`;
   openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(viewMonth)}開銷</span><h2>${expense ? '編輯一筆開銷' : '記錄一筆開銷'}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="monthly-expense-form"><div class="form-row"><label for="monthly-expense-amount">金額（TWD）</label><input id="monthly-expense-amount" name="amount" type="text" value="${inputAmount(expense?.amount)}" placeholder="例如：120+45" required inputmode="text" data-calculator></div><div class="form-row"><label for="monthly-expense-date">日期</label><input id="monthly-expense-date" name="date" type="date" value="${expense?.date || defaultDate}" required></div><div class="form-row"><label for="monthly-expense-payment">付款方式</label><select id="monthly-expense-payment" name="payment"><option value="cash" ${expense?.payment === 'cash' || !expense ? 'selected' : ''}>現金（本月扣除）</option><option value="card" ${expense?.payment === 'card' ? 'selected' : ''}>信用卡（下月 25 日扣除）</option></select></div><p class="form-note">本月開銷只記付款方式與金額；消費明細可保留在你原本的記錄工具。</p><div class="modal-actions">${expense ? '<button type="button" class="button danger" id="delete-monthly-expense">刪除</button>' : ''}<button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">${expense ? '儲存變更' : '新增開銷'}</button></div></form>`);
   const monthlyExpenseForm = currentModal.querySelector('#monthly-expense-form'); enableAmountCalculator(monthlyExpenseForm);
-  monthlyExpenseForm.addEventListener('submit', event => { event.preventDefault(); const form = new FormData(monthlyExpenseForm), user = getUser(), oldMonth = expense ? periodMonthForDate(expense.date) : null, amount = amountFromForm(monthlyExpenseForm, 'amount'), payment = String(form.get('payment')); if (amount === null) return; const entry = { id: expense?.id || crypto.randomUUID(), name: payment === 'card' ? '信用卡消費' : '現金開銷', amount, date: String(form.get('date')), payment, category: '' }; const entryMonth = periodMonthForDate(entry.date); if (expense) user.monthlyExpenses = user.monthlyExpenses.map(item => item.id === expense.id ? entry : item); else user.monthlyExpenses.push(entry); if (oldMonth) { refreshMonthSnapshotTotal(user, oldMonth); refreshMonthSnapshotTotal(user, shiftMonth(oldMonth, 1)); } refreshMonthSnapshotTotal(user, entryMonth); refreshMonthSnapshotTotal(user, shiftMonth(entryMonth, 1)); viewMonth = entryMonth; persistUser(user); closeModal(); renderDashboard(); showToast(expense ? '本月開銷已更新' : '本月開銷已新增'); });
-  currentModal.querySelector('#delete-monthly-expense')?.addEventListener('click', () => { const user = getUser(), expenseMonth = periodMonthForDate(expense.date); user.monthlyExpenses = user.monthlyExpenses.filter(item => item.id !== expense.id); refreshMonthSnapshotTotal(user, expenseMonth); refreshMonthSnapshotTotal(user, shiftMonth(expenseMonth, 1)); persistUser(user); closeModal(); renderDashboard(); showToast('本月開銷已刪除'); });
+  monthlyExpenseForm.addEventListener('submit', event => { event.preventDefault(); const form = new FormData(monthlyExpenseForm), user = getUser(), startDay = periodStartDay(user), oldMonth = expense ? periodMonthForDate(expense.date, startDay) : null, amount = amountFromForm(monthlyExpenseForm, 'amount'), payment = String(form.get('payment')); if (amount === null) return; const entry = { id: expense?.id || crypto.randomUUID(), name: payment === 'card' ? '信用卡消費' : '現金開銷', amount, date: String(form.get('date')), payment, category: '' }; const entryMonth = periodMonthForDate(entry.date, startDay); if (expense) user.monthlyExpenses = user.monthlyExpenses.map(item => item.id === expense.id ? entry : item); else user.monthlyExpenses.push(entry); if (oldMonth) { refreshMonthSnapshotTotal(user, oldMonth); refreshMonthSnapshotTotal(user, shiftMonth(oldMonth, 1)); } refreshMonthSnapshotTotal(user, entryMonth); refreshMonthSnapshotTotal(user, shiftMonth(entryMonth, 1)); viewMonth = entryMonth; persistUser(user); closeModal(); renderDashboard(); showToast(expense ? '本月開銷已更新' : '本月開銷已新增'); });
+  currentModal.querySelector('#delete-monthly-expense')?.addEventListener('click', () => { const user = getUser(), expenseMonth = periodMonthForDate(expense.date, periodStartDay(user)); user.monthlyExpenses = user.monthlyExpenses.filter(item => item.id !== expense.id); refreshMonthSnapshotTotal(user, expenseMonth); refreshMonthSnapshotTotal(user, shiftMonth(expenseMonth, 1)); persistUser(user); closeModal(); renderDashboard(); showToast('本月開銷已刪除'); });
 }
 
 function openAccountModal() {
   const user = getUser();
-  openModal(`<header class="modal-header"><div><span class="eyebrow">帳號設定</span><h2>${escapeHTML(user.name)}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><p class="subtle">${escapeHTML(user.email)}</p><hr class="divider"><p class="form-note">帳本會安全同步到你的雲端帳號。換手機或電腦後，登入同一個信箱即可繼續使用。</p><div class="modal-actions"><button class="button light" data-close-modal>返回</button><button class="button danger" id="confirm-logout">登出</button></div>`);
+  const startDay = periodStartDay(user);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">設定</span><h2>記帳設定</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><p class="subtle">${escapeHTML(user.name)} · ${escapeHTML(user.email)}</p><form id="account-settings-form"><section class="period-settings-card"><div><label for="period-start-day">每月記帳起始日</label><small>結束日會自動設定為下一個週期開始前一天</small></div><select id="period-start-day" name="periodStartDay" aria-label="每月記帳起始日">${Array.from({ length: 28 }, (_, index) => index + 1).map(day => `<option value="${day}" ${day === startDay ? 'selected' : ''}>每月 ${day} 日</option>`).join('')}</select><p id="period-range-preview">${monthText(viewMonth)}：${periodRangeText(viewMonth, user)}</p></section><p class="form-note">為確保每個月份都有這個日期，可選擇每月 1～28 日。修改後，收入與開銷會依新區間歸類。</p><div class="modal-actions"><button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">儲存設定</button></div></form><hr class="divider"><button class="button danger account-logout-button" id="confirm-logout" type="button">登出帳號</button>`);
+  const settingsForm = currentModal.querySelector('#account-settings-form');
+  const startDaySelect = settingsForm.querySelector('#period-start-day');
+  const rangePreview = settingsForm.querySelector('#period-range-preview');
+  startDaySelect.addEventListener('change', () => {
+    const previewUser = { periodStartDay: normalizePeriodStartDay(startDaySelect.value) };
+    rangePreview.textContent = `${monthText(viewMonth)}：${periodRangeText(viewMonth, previewUser)}`;
+  });
+  settingsForm.addEventListener('submit', event => {
+    event.preventDefault();
+    user.periodStartDay = normalizePeriodStartDay(new FormData(settingsForm).get('periodStartDay'));
+    viewMonth = todayMonth(user);
+    persistUser(user);
+    closeModal();
+    renderDashboard();
+    showToast(`每月區間已改為 ${periodRangeText(viewMonth, user)}`);
+  });
   currentModal.querySelector('#confirm-logout').addEventListener('click', async () => {
     window.clearTimeout(cloudSyncTimer);
     stopMarketQuoteUpdates();
@@ -1946,7 +1980,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=47').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=48').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

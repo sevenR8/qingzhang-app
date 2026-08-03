@@ -1044,10 +1044,77 @@ function openModal(content) {
   currentModal.className = 'modal-backdrop';
   currentModal.innerHTML = `<section class="modal" role="dialog" aria-modal="true">${content}</section>`;
   document.body.append(currentModal);
+  bindModalSwipeToClose(currentModal);
   currentModal.querySelectorAll('[data-close-modal]').forEach(button => button.addEventListener('click', closeModal));
   currentModal.querySelector('input, select')?.focus();
 }
 function closeModal() { currentModal?.remove(); currentModal = null; }
+
+function bindModalSwipeToClose(backdrop) {
+  const modal = backdrop.querySelector('.modal');
+  if (!modal) return;
+  let swipe = null;
+  const resetSwipeStyle = () => {
+    modal.classList.remove('modal-swipe-active');
+    modal.style.removeProperty('transition');
+    modal.style.removeProperty('transform');
+    backdrop.style.removeProperty('transition');
+    backdrop.style.removeProperty('background');
+  };
+  modal.addEventListener('pointerdown', event => {
+    if (!window.matchMedia('(max-width: 699px)').matches || event.isPrimary === false || event.button !== 0) return;
+    if (event.target.closest('button, input, select, textarea, label, .drag-handle')) return;
+    const rect = modal.getBoundingClientRect();
+    if (event.clientX > rect.left + 56) return;
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), width: rect.width, active: false, cancelled: false };
+  });
+  modal.addEventListener('pointermove', event => {
+    if (!swipe || event.pointerId !== swipe.id || swipe.cancelled) return;
+    const dx = event.clientX - swipe.x;
+    const dy = event.clientY - swipe.y;
+    if (!swipe.active) {
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { swipe.cancelled = true; return; }
+      if (dx < 10 || dx < Math.abs(dy) * 1.2) return;
+      swipe.active = true;
+      modal.classList.add('modal-swipe-active');
+      modal.setPointerCapture?.(event.pointerId);
+    }
+    event.preventDefault();
+    const distance = Math.max(0, dx);
+    const progress = Math.min(distance / Math.max(swipe.width * .75, 1), 1);
+    modal.style.transform = `translateX(${distance}px)`;
+    backdrop.style.background = `rgba(10, 36, 31, ${Math.max(.05, .43 * (1 - progress))})`;
+  });
+  const finishSwipe = event => {
+    if (!swipe || event.pointerId !== swipe.id) return;
+    const gesture = swipe;
+    swipe = null;
+    if (!gesture.active) { resetSwipeStyle(); return; }
+    const dx = Math.max(0, event.clientX - gesture.x);
+    const elapsed = Date.now() - gesture.time;
+    const shouldClose = dx >= gesture.width * .32 || (dx >= 58 && elapsed <= 420);
+    modal.classList.remove('modal-swipe-active');
+    modal.style.transition = 'transform .18s cubic-bezier(.22,.75,.26,1)';
+    backdrop.style.transition = 'background .18s ease';
+    if (shouldClose) {
+      modal.style.transform = 'translateX(calc(100vw + 32px))';
+      backdrop.style.background = 'rgba(10, 36, 31, 0)';
+      window.setTimeout(() => { if (currentModal === backdrop) closeModal(); }, 180);
+      return;
+    }
+    modal.style.transform = 'translateX(0)';
+    backdrop.style.background = 'rgba(10, 36, 31, .43)';
+    window.setTimeout(() => { if (currentModal === backdrop) resetSwipeStyle(); }, 180);
+  };
+  modal.addEventListener('pointerup', finishSwipe);
+  modal.addEventListener('pointercancel', event => {
+    if (!swipe || event.pointerId !== swipe.id) return;
+    swipe = null;
+    modal.style.transition = 'transform .16s ease';
+    modal.style.transform = 'translateX(0)';
+    window.setTimeout(() => { if (currentModal === backdrop) resetSwipeStyle(); }, 160);
+  });
+}
 
 function applyTwHoldingsTotal(user, month = viewMonth) {
   const state = twStockState(user, month);
@@ -1980,7 +2047,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=48').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=49').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

@@ -1055,7 +1055,7 @@ function bindModalSwipeToClose(backdrop) {
   if (!modal) return;
   let swipe = null;
   const resetSwipeStyle = () => {
-    modal.classList.remove('modal-swipe-active');
+    modal.classList.remove('modal-swipe-active', 'modal-swipe-settling');
     modal.style.removeProperty('transition');
     modal.style.removeProperty('transform');
     backdrop.style.removeProperty('transition');
@@ -1066,7 +1066,7 @@ function bindModalSwipeToClose(backdrop) {
     if (event.target.closest('button, input, select, textarea, label, .drag-handle')) return;
     const rect = modal.getBoundingClientRect();
     if (event.clientX > rect.left + 56) return;
-    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), width: rect.width, active: false, cancelled: false };
+    swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), left: rect.left, width: rect.width, distance: 0, active: false, cancelled: false };
   });
   modal.addEventListener('pointermove', event => {
     if (!swipe || event.pointerId !== swipe.id || swipe.cancelled) return;
@@ -1081,10 +1081,33 @@ function bindModalSwipeToClose(backdrop) {
     }
     event.preventDefault();
     const distance = Math.max(0, dx);
+    swipe.distance = distance;
     const progress = Math.min(distance / Math.max(swipe.width * .75, 1), 1);
-    modal.style.transform = `translateX(${distance}px)`;
+    modal.style.transform = `translate3d(${distance}px, 0, 0)`;
     backdrop.style.background = `rgba(10, 36, 31, ${Math.max(.05, .43 * (1 - progress))})`;
   });
+  const settleSwipe = (gesture, shouldClose) => {
+    const currentDistance = Math.max(0, Number(gesture.distance || 0));
+    const duration = shouldClose ? 200 : 170;
+    modal.style.transform = `translate3d(${currentDistance}px, 0, 0)`;
+    modal.style.transition = 'none';
+    backdrop.style.transition = 'none';
+    modal.classList.remove('modal-swipe-active');
+    modal.classList.add('modal-swipe-settling');
+    void modal.offsetWidth;
+    modal.style.transition = `transform ${duration}ms cubic-bezier(.22,.75,.26,1)`;
+    backdrop.style.transition = `background ${duration}ms ease`;
+    const targetDistance = Math.ceil(Math.max(window.innerWidth - gesture.left + 48, gesture.width + 48));
+    window.requestAnimationFrame(() => {
+      modal.style.transform = shouldClose ? `translate3d(${targetDistance}px, 0, 0)` : 'translate3d(0, 0, 0)';
+      backdrop.style.background = shouldClose ? 'rgba(10, 36, 31, 0)' : 'rgba(10, 36, 31, .43)';
+    });
+    window.setTimeout(() => {
+      if (currentModal !== backdrop) return;
+      if (shouldClose) closeModal();
+      else resetSwipeStyle();
+    }, duration + 35);
+  };
   const finishSwipe = event => {
     if (!swipe || event.pointerId !== swipe.id) return;
     const gesture = swipe;
@@ -1093,26 +1116,16 @@ function bindModalSwipeToClose(backdrop) {
     const dx = Math.max(0, event.clientX - gesture.x);
     const elapsed = Date.now() - gesture.time;
     const shouldClose = dx >= gesture.width * .32 || (dx >= 58 && elapsed <= 420);
-    modal.classList.remove('modal-swipe-active');
-    modal.style.transition = 'transform .18s cubic-bezier(.22,.75,.26,1)';
-    backdrop.style.transition = 'background .18s ease';
-    if (shouldClose) {
-      modal.style.transform = 'translateX(calc(100vw + 32px))';
-      backdrop.style.background = 'rgba(10, 36, 31, 0)';
-      window.setTimeout(() => { if (currentModal === backdrop) closeModal(); }, 180);
-      return;
-    }
-    modal.style.transform = 'translateX(0)';
-    backdrop.style.background = 'rgba(10, 36, 31, .43)';
-    window.setTimeout(() => { if (currentModal === backdrop) resetSwipeStyle(); }, 180);
+    gesture.distance = Math.max(gesture.distance, dx);
+    settleSwipe(gesture, shouldClose);
   };
   modal.addEventListener('pointerup', finishSwipe);
   modal.addEventListener('pointercancel', event => {
     if (!swipe || event.pointerId !== swipe.id) return;
+    const gesture = swipe;
     swipe = null;
-    modal.style.transition = 'transform .16s ease';
-    modal.style.transform = 'translateX(0)';
-    window.setTimeout(() => { if (currentModal === backdrop) resetSwipeStyle(); }, 160);
+    if (gesture.active) settleSwipe(gesture, false);
+    else resetSwipeStyle();
   });
 }
 
@@ -2047,7 +2060,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=49').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=50').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

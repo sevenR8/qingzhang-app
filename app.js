@@ -837,7 +837,7 @@ function renderDashboard() {
         </section>
       </div>
     </main>
-    <nav class="bottom-nav" aria-label="主要功能"><button class="active"><span class="nav-icon">⌂</span>總覽</button><button id="mobile-history"><span class="nav-icon">⌁</span>趨勢</button><button id="mobile-expense"><span class="nav-icon">◒</span>本月開銷</button></nav>`;
+    <nav class="bottom-nav" aria-label="主要功能"><button class="active" id="mobile-overview"><span class="nav-icon">⌂</span>總覽</button><button id="mobile-history"><span class="nav-icon">⌁</span>趨勢</button><button id="mobile-expense"><span class="nav-icon">◒</span>本月開銷</button></nav>`;
   drawChart(chartHistory);
   bindDashboard();
 }
@@ -913,6 +913,7 @@ function bindDashboard() {
   document.querySelectorAll('[data-asset]').forEach(button => button.addEventListener('click', () => openAssetModal(button.dataset.asset)));
   document.querySelectorAll('[data-expense]').forEach(button => button.addEventListener('click', () => openExpenseModal(button.dataset.expense)));
   document.querySelectorAll('[data-monthly-expense]').forEach(button => button.addEventListener('click', () => openMonthlyExpenseModal(button.dataset.monthlyExpense)));
+  document.querySelector('#mobile-overview').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
   document.querySelector('#mobile-history').addEventListener('click', () => document.querySelector('.chart-card').scrollIntoView({ behavior: 'smooth', block: 'center' }));
   document.querySelector('#mobile-expense').addEventListener('click', () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
 }
@@ -1938,7 +1939,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=42').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=43').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', () => {

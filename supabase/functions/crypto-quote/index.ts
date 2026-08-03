@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+export {};
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -54,12 +54,15 @@ Deno.serve(async (request) => {
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
   if (!supabaseUrl || !supabaseAnonKey) return json({ error: 'Supabase 環境設定不完整' }, 500);
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: authorization } },
-    auth: { persistSession: false, autoRefreshToken: false },
+  const userResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: authorization,
+      apikey: supabaseAnonKey,
+    },
   });
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) return json({ error: '登入狀態已失效，請重新登入' }, 401);
+  if (!userResponse.ok) return json({ error: '登入狀態已失效，請重新登入' }, 401);
+  const user = await userResponse.json();
+  if (!user?.id) return json({ error: '登入狀態已失效，請重新登入' }, 401);
 
   let payload: { items?: Array<{ symbol?: unknown }> };
   try {

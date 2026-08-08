@@ -24,7 +24,10 @@ let currentModal = null;
 let toastTimer;
 let activeUser = null;
 let viewMonth = todayMonth();
-let cloudSyncTimer;
+let cloudSyncQueue = Promise.resolve(true);
+let cloudBookRefreshPromise = null;
+let lastCloudBookRefreshAt = 0;
+let lastCloudBookUpdatedAt = '';
 let twQuoteRequestInFlight = false;
 let twAutoRefreshAttemptedAt = 0;
 let usQuoteRequestInFlight = false;
@@ -626,12 +629,26 @@ function defaultUser(name, email) {
   };
 }
 
-function persistUser(user) {
+function persistUser(user, { quiet = false } = {}) {
   activeUser = normalizeUser(user);
   refreshAllSnapshotTotals(activeUser);
   cacheBook(activeUser);
-  window.clearTimeout(cloudSyncTimer);
-  cloudSyncTimer = window.setTimeout(() => syncBookToCloud(), 350);
+  return syncBookToCloud({ quiet });
+}
+
+async function saveUserImmediately(user, trigger) {
+  const originalText = trigger?.textContent;
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.textContent = '雲端儲存中…';
+  }
+  const saved = await persistUser(user, { quiet: true });
+  if (trigger?.isConnected) {
+    trigger.disabled = false;
+    trigger.textContent = originalText;
+  }
+  if (!saved) showToast('雲端儲存失敗，請確認網路後再試一次。');
+  return saved;
 }
 
 function bookPayload(user) {
@@ -685,25 +702,35 @@ function makeUserFromCloud(authUser, row) {
   return user;
 }
 
-async function syncBookToCloud({ quiet = false } = {}) {
-  if (!supabaseClient || !activeUser?.id) return false;
-  const { error } = await supabaseClient.from('user_books').upsert({
-    user_id: activeUser.id,
-    display_name: activeUser.name,
-    book: bookPayload(activeUser)
-  }, { onConflict: 'user_id' });
-  if (error) {
-    console.error('Supabase sync failed', error);
-    if (!quiet) showToast('暫時無法同步到雲端，資料已保留在此裝置。');
-    return false;
-  }
-  cacheBook(activeUser);
-  return true;
+function syncBookToCloud({ quiet = false } = {}) {
+  if (!supabaseClient || !activeUser?.id) return Promise.resolve(false);
+  const syncUserId = activeUser.id;
+  const displayName = activeUser.name;
+  const book = structuredClone(bookPayload(activeUser));
+  const updatedAt = new Date().toISOString();
+  const job = async () => {
+    const { error } = await supabaseClient.from('user_books').upsert({
+      user_id: syncUserId,
+      display_name: displayName,
+      book,
+      updated_at: updatedAt
+    }, { onConflict: 'user_id' });
+    if (error) {
+      console.error('Supabase sync failed', error);
+      if (!quiet) showToast('暫時無法同步到雲端，資料已保留在此裝置。');
+      return false;
+    }
+    if (activeUser?.id === syncUserId) cacheBook(activeUser);
+    if (!lastCloudBookUpdatedAt || updatedAt > lastCloudBookUpdatedAt) lastCloudBookUpdatedAt = updatedAt;
+    return true;
+  };
+  cloudSyncQueue = cloudSyncQueue.catch(() => false).then(job);
+  return cloudSyncQueue;
 }
 
 async function loadCloudBook(authUser) {
   if (!supabaseClient) { renderCloudSetupError('無法載入雲端服務。請重新整理後再試。'); return; }
-  const { data, error } = await supabaseClient.from('user_books').select('display_name, book').eq('user_id', authUser.id).maybeSingle();
+  const { data, error } = await supabaseClient.from('user_books').select('display_name, book, updated_at').eq('user_id', authUser.id).maybeSingle();
   if (error) {
     console.error('Supabase load failed', error);
     const cached = getCachedBook(authUser.id);
@@ -719,11 +746,38 @@ async function loadCloudBook(authUser) {
     return;
   }
   activeUser = makeUserFromCloud(authUser, data);
+  lastCloudBookUpdatedAt = data?.updated_at || '';
   viewMonth = todayMonth(activeUser);
   cacheBook(activeUser);
   if (!data) await syncBookToCloud({ quiet: true });
   renderDashboard();
   startMarketQuoteUpdates();
+}
+
+function refreshCloudBookWhenVisible({ force = false } = {}) {
+  if (!supabaseClient || !activeUser?.id || currentModal || document.visibilityState !== 'visible') return Promise.resolve(false);
+  if (cloudBookRefreshPromise) return cloudBookRefreshPromise;
+  if (!force && Date.now() - lastCloudBookRefreshAt < 1500) return Promise.resolve(false);
+  const userId = activeUser.id;
+  const authUser = { id: userId, email: activeUser.email, user_metadata: { display_name: activeUser.name } };
+  cloudBookRefreshPromise = (async () => {
+    await cloudSyncQueue.catch(() => false);
+    const { data, error } = await supabaseClient.from('user_books').select('display_name, book, updated_at').eq('user_id', userId).maybeSingle();
+    lastCloudBookRefreshAt = Date.now();
+    if (error || !data || activeUser?.id !== userId) {
+      if (error) console.error('Supabase refresh failed', error);
+      return false;
+    }
+    const remoteUpdatedAt = data.updated_at || '';
+    if (lastCloudBookUpdatedAt && remoteUpdatedAt && remoteUpdatedAt <= lastCloudBookUpdatedAt) return false;
+    activeUser = makeUserFromCloud(authUser, data);
+    lastCloudBookUpdatedAt = remoteUpdatedAt;
+    cacheBook(activeUser);
+    renderDashboard();
+    showToast('已載入雲端最新資料');
+    return true;
+  })().finally(() => { cloudBookRefreshPromise = null; });
+  return cloudBookRefreshPromise;
 }
 
 function renderCloudSetupError(message) {
@@ -1066,6 +1120,7 @@ function closeModal() {
   document.body.classList.remove('modal-page-locked');
   document.body.style.removeProperty('top');
   window.scrollTo(0, scrollY);
+  window.setTimeout(() => refreshCloudBookWhenVisible(), 0);
 }
 
 function bindModalSwipeToClose(backdrop) {
@@ -1263,7 +1318,7 @@ function openTwStockModal(editId = null) {
       preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
     };
     input.addEventListener('input', updatePreview);
-    manualTotalForm.addEventListener('submit', event => {
+    manualTotalForm.addEventListener('submit', async event => {
       event.preventDefault();
       const amount = calculateAmount(input.value);
       if (amount === null) {
@@ -1280,12 +1335,12 @@ function openTwStockModal(editId = null) {
       monthAssets.tw = amount;
       syncLegacyTwStockData(user, month);
       refreshMonthSnapshotTotal(user, month);
-      persistUser(user);
+      if (!await saveUserImmediately(user, event.submitter)) return;
       renderDashboard();
       input.value = String(amount);
       preview.textContent = `已儲存：NT$ ${money(amount)}`;
       errorHost.textContent = '';
-      showToast('台股手動總額已更新');
+      showToast('台股手動總額已儲存並同步');
     });
   }
   currentModal.querySelector('#tw-auto-mode').addEventListener('change', event => {
@@ -1481,7 +1536,7 @@ function openUsStockModal(editId = null) {
       preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
     };
     input.addEventListener('input', updatePreview);
-    manualTotalForm.addEventListener('submit', event => {
+    manualTotalForm.addEventListener('submit', async event => {
       event.preventDefault();
       const amount = calculateAmount(input.value);
       if (amount === null) {
@@ -1498,12 +1553,12 @@ function openUsStockModal(editId = null) {
       monthAssets.us = amount;
       syncLegacyUsStockData(user, month);
       refreshMonthSnapshotTotal(user, month);
-      persistUser(user);
+      if (!await saveUserImmediately(user, event.submitter)) return;
       renderDashboard();
       input.value = String(amount);
       preview.textContent = `已儲存：NT$ ${money(amount)}`;
       errorHost.textContent = '';
-      showToast('美股手動總額已更新');
+      showToast('美股手動總額已儲存並同步');
     });
   }
   currentModal.querySelector('#us-auto-mode').addEventListener('change', event => {
@@ -1768,7 +1823,7 @@ function openCryptoModal(editId = null) {
       preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
     };
     input.addEventListener('input', updatePreview);
-    manualTotalForm.addEventListener('submit', event => {
+    manualTotalForm.addEventListener('submit', async event => {
       event.preventDefault();
       const amount = calculateAmount(input.value);
       if (amount === null) {
@@ -1785,12 +1840,12 @@ function openCryptoModal(editId = null) {
       monthAssets.crypto = amount;
       syncLegacyCryptoData(user, month);
       refreshMonthSnapshotTotal(user, month);
-      persistUser(user);
+      if (!await saveUserImmediately(user, event.submitter)) return;
       renderDashboard();
       input.value = String(amount);
       preview.textContent = `已儲存：NT$ ${money(amount)}`;
       errorHost.textContent = '';
-      showToast('加密貨幣手動總額已更新');
+      showToast('加密貨幣手動總額已儲存並同步');
     });
   }
   currentModal.querySelector('#crypto-auto-mode').addEventListener('change', event => {
@@ -1912,7 +1967,7 @@ function openCashModal() {
       preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
     };
     input.addEventListener('input', updatePreview);
-    manualForm.addEventListener('submit', event => {
+    manualForm.addEventListener('submit', async event => {
       event.preventDefault();
       const amount = calculateAmount(input.value);
       if (amount === null) {
@@ -1927,10 +1982,10 @@ function openCashModal() {
       state.mode = 'manual';
       rawAssets.cash = amount;
       syncLegacyCashData(user, month);
-      persistUser(user);
+      if (!await saveUserImmediately(user, event.submitter)) return;
       renderDashboard();
       openCashModal();
-      showToast('現金手動總額已更新');
+      showToast('現金手動總額已儲存並同步');
     });
   }
   currentModal.querySelectorAll('input[name="cash-mode"]').forEach(input => input.addEventListener('change', event => {
@@ -1960,7 +2015,7 @@ function openBasicAssetModal(key) {
   const user = getUser(), meta = assetMeta[key], assets = assetsForMonth(user, viewMonth);
   openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(viewMonth)}資產總價</span><h2>更新${meta.label}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="asset-form"><div class="form-row"><label for="asset-amount">${monthText(viewMonth)}總價（TWD）</label><input id="asset-amount" name="amount" type="text" value="${inputAmount(assets[key])}" placeholder="例如：172883+100" required inputmode="text" data-calculator></div><p class="form-note">可直接輸入 172883+100、50000-3200 或 (1200+800)*2。填完四項資產後，再同步該月份資料到走勢圖。</p><div class="modal-actions"><button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">儲存金額</button></div></form>`);
   const assetForm = currentModal.querySelector('#asset-form'); enableAmountCalculator(assetForm);
-  assetForm.addEventListener('submit', event => {
+  assetForm.addEventListener('submit', async event => {
     event.preventDefault();
     const user = getUser(), amount = amountFromForm(assetForm, 'amount'), month = viewMonth;
     if (amount === null) return;
@@ -1973,10 +2028,10 @@ function openBasicAssetModal(key) {
       syncLegacyTwStockData(user, month);
     }
     refreshMonthSnapshotTotal(user, month);
-    persistUser(user);
+    if (!await saveUserImmediately(user, event.submitter)) return;
     closeModal();
     renderDashboard();
-    showToast(`${meta.label}已更新`);
+    showToast(`${meta.label}已儲存並同步`);
   });
 }
 
@@ -2000,14 +2055,14 @@ function openAssetsModal() {
 function openSnapshotModal() {
   const user = getUser(), total = totalAssets(user, viewMonth), month = viewMonth;
   openModal(`<header class="modal-header"><div><span class="eyebrow">月度紀錄</span><h2>同步本月資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="snapshot-form"><div class="calculated-total"><span>${monthText(month)}總資產</span><strong>NT$ ${money(total)}</strong><small>自動加總現金、台股、美股、加密貨幣</small></div><p class="form-note">同一月份重複同步會覆蓋舊紀錄。請先更新四項資產的目前總價。</p><div class="modal-actions"><button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">同步到走勢圖</button></div></form>`);
-  currentModal.querySelector('#snapshot-form').addEventListener('submit', event => { event.preventDefault(); const user = getUser(), month = viewMonth; const snapshot = ensureMonthSnapshot(user, month); snapshot.assets = { ...assetsForMonth(user, month) }; snapshot.fixedExpenses = cloneFixedExpenses(fixedExpensesForMonth(user, month)); snapshot.total = totalAssets(user, month); user.history.sort((a,b) => a.month.localeCompare(b.month)); persistUser(user); closeModal(); renderDashboard(); showToast(`${monthText(month)}的資產已同步`); });
+  currentModal.querySelector('#snapshot-form').addEventListener('submit', async event => { event.preventDefault(); const user = getUser(), month = viewMonth; const snapshot = ensureMonthSnapshot(user, month); snapshot.assets = { ...assetsForMonth(user, month) }; snapshot.fixedExpenses = cloneFixedExpenses(fixedExpensesForMonth(user, month)); snapshot.total = totalAssets(user, month); user.history.sort((a,b) => a.month.localeCompare(b.month)); if (!await saveUserImmediately(user, event.submitter)) return; closeModal(); renderDashboard(); showToast(`${monthText(month)}的資產已儲存並同步`); });
 }
 
 function openIncomeModal() {
   const user = getUser(), month = viewMonth, income = incomeForMonth(user, month);
   openModal(`<header class="modal-header"><div><span class="eyebrow">本月收入</span><h2>更新收入</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="income-form"><div class="form-row"><label for="income-month">月份</label><input id="income-month" name="month" type="month" value="${month}" required></div><div class="form-row"><label for="salary-income">薪資收入（TWD）</label><input id="salary-income" name="salary" type="text" value="${inputAmount(income.salary)}" placeholder="例如：50000" required inputmode="text" data-calculator></div><div class="form-row"><label for="other-income">其他收入（TWD）</label><input id="other-income" name="other" type="text" value="${inputAmount(income.other)}" placeholder="例如：12000+3000" required inputmode="text" data-calculator></div><div class="form-row"><label for="other-income-note">其他收入來源（選填）</label><input id="other-income-note" name="otherNote" value="${escapeHTML(income.otherNote)}" placeholder="例如：接案、年終獎金、紅包" maxlength="40"></div><p class="form-note">金額可直接用 + − × ÷ 計算。收入來源會顯示在其他收入下方。</p><div class="modal-actions"><button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">儲存收入</button></div></form>`);
   const incomeForm = currentModal.querySelector('#income-form'); enableAmountCalculator(incomeForm);
-  incomeForm.addEventListener('submit', event => { event.preventDefault(); const form = new FormData(incomeForm), user = getUser(), month = String(form.get('month')), salary = amountFromForm(incomeForm, 'salary'), other = amountFromForm(incomeForm, 'other'); if (salary === null || other === null) return; user.incomes[month] = { salary, other, otherNote: String(form.get('otherNote')).trim() }; viewMonth = month; persistUser(user); closeModal(); renderDashboard(); showToast(`${monthText(month)}的收入已儲存`); });
+  incomeForm.addEventListener('submit', async event => { event.preventDefault(); const form = new FormData(incomeForm), user = getUser(), month = String(form.get('month')), salary = amountFromForm(incomeForm, 'salary'), other = amountFromForm(incomeForm, 'other'); if (salary === null || other === null) return; user.incomes[month] = { salary, other, otherNote: String(form.get('otherNote')).trim() }; viewMonth = month; if (!await saveUserImmediately(user, event.submitter)) return; closeModal(); renderDashboard(); showToast(`${monthText(month)}的收入已儲存並同步`); });
 }
 
 function openHistoryModal() {
@@ -2022,7 +2077,7 @@ function openExpenseModal(id) {
   const user = getUser(); const fixedExpenses = fixedExpensesForMonth(user, viewMonth); const expense = id ? fixedExpenses.find(item => item.id === id) : null;
   openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(viewMonth)}固定開銷</span><h2>${expense ? '編輯固定開銷' : '新增固定開銷'}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="expense-form"><div class="form-row"><label for="expense-name">項目名稱</label><input id="expense-name" name="name" value="${escapeHTML(expense?.name || '')}" placeholder="例如：房租" required maxlength="40"></div><div class="form-row"><label for="expense-amount">每月金額（TWD）</label><input id="expense-amount" name="amount" type="text" value="${inputAmount(expense?.amount)}" placeholder="例如：30000+1200" required inputmode="text" data-calculator></div><div class="form-row"><label for="expense-day">扣款日</label><select id="expense-day" name="day">${Array.from({length:31},(_,i) => `<option value="${i+1}" ${(expense?.day || 1) === i+1 ? 'selected' : ''}>每月 ${i+1} 日</option>`).join('')}</select></div><div class="form-row"><label for="expense-category">分類（選填）</label><input id="expense-category" name="category" value="${escapeHTML(expense?.category || '')}" placeholder="例如：居住、訂閱、保險" maxlength="30"></div><div class="modal-actions">${expense ? '<button type="button" class="button danger" id="delete-expense">刪除</button>' : ''}<button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">${expense ? '儲存變更' : '新增開銷'}</button></div></form>`);
   const expenseForm = currentModal.querySelector('#expense-form'); enableAmountCalculator(expenseForm);
-  expenseForm.addEventListener('submit', event => {
+  expenseForm.addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(expenseForm), user = getUser(), amount = amountFromForm(expenseForm, 'amount');
     if (amount === null) return;
@@ -2038,12 +2093,12 @@ function openExpenseModal(id) {
       else snapshot.fixedExpenses.push(entry);
     }
     refreshMonthSnapshotTotal(user, viewMonth);
-    persistUser(user);
+    if (!await saveUserImmediately(user, event.submitter)) return;
     closeModal();
     renderDashboard();
-    showToast(expense ? '固定開銷已更新' : '固定開銷已新增');
+    showToast(expense ? '固定開銷已儲存並同步' : '固定開銷已新增並同步');
   });
-  currentModal.querySelector('#delete-expense')?.addEventListener('click', () => { const user = getUser(); if (viewMonth === todayMonth()) user.expenses = user.expenses.filter(item => item.id !== expense.id); else { const snapshot = ensureMonthSnapshot(user, viewMonth); snapshot.fixedExpenses = snapshot.fixedExpenses.filter(item => item.id !== expense.id); } refreshMonthSnapshotTotal(user, viewMonth); persistUser(user); closeModal(); renderDashboard(); showToast('固定開銷已刪除'); });
+  currentModal.querySelector('#delete-expense')?.addEventListener('click', async event => { const user = getUser(); if (viewMonth === todayMonth()) user.expenses = user.expenses.filter(item => item.id !== expense.id); else { const snapshot = ensureMonthSnapshot(user, viewMonth); snapshot.fixedExpenses = snapshot.fixedExpenses.filter(item => item.id !== expense.id); } refreshMonthSnapshotTotal(user, viewMonth); if (!await saveUserImmediately(user, event.currentTarget)) return; closeModal(); renderDashboard(); showToast('固定開銷已刪除並同步'); });
 }
 
 function openMonthlyExpenseModal(id) {
@@ -2051,8 +2106,33 @@ function openMonthlyExpenseModal(id) {
   const defaultDate = viewMonth === todayMonth(user) ? todayDate() : `${viewMonth}-${String(periodStartDay(user)).padStart(2, '0')}`;
   openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(viewMonth)}開銷</span><h2>${expense ? '編輯一筆開銷' : '記錄一筆開銷'}</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><form id="monthly-expense-form"><div class="form-row"><label for="monthly-expense-amount">金額（TWD）</label><input id="monthly-expense-amount" name="amount" type="text" value="${inputAmount(expense?.amount)}" placeholder="例如：120+45" required inputmode="text" data-calculator></div><div class="form-row"><label for="monthly-expense-date">日期</label><input id="monthly-expense-date" name="date" type="date" value="${expense?.date || defaultDate}" required></div><div class="form-row"><label for="monthly-expense-payment">付款方式</label><select id="monthly-expense-payment" name="payment"><option value="cash" ${expense?.payment === 'cash' || !expense ? 'selected' : ''}>現金（本月扣除）</option><option value="card" ${expense?.payment === 'card' ? 'selected' : ''}>信用卡（下月 25 日扣除）</option></select></div><p class="form-note">本月開銷只記付款方式與金額；消費明細可保留在你原本的記錄工具。</p><div class="modal-actions">${expense ? '<button type="button" class="button danger" id="delete-monthly-expense">刪除</button>' : ''}<button type="button" class="button light" data-close-modal>取消</button><button class="button primary" type="submit">${expense ? '儲存變更' : '新增開銷'}</button></div></form>`);
   const monthlyExpenseForm = currentModal.querySelector('#monthly-expense-form'); enableAmountCalculator(monthlyExpenseForm);
-  monthlyExpenseForm.addEventListener('submit', event => { event.preventDefault(); const form = new FormData(monthlyExpenseForm), user = getUser(), startDay = periodStartDay(user), oldMonth = expense ? periodMonthForDate(expense.date, startDay) : null, amount = amountFromForm(monthlyExpenseForm, 'amount'), payment = String(form.get('payment')); if (amount === null) return; const entry = { id: expense?.id || crypto.randomUUID(), name: payment === 'card' ? '信用卡消費' : '現金開銷', amount, date: String(form.get('date')), payment, category: '' }; const entryMonth = periodMonthForDate(entry.date, startDay); if (expense) user.monthlyExpenses = user.monthlyExpenses.map(item => item.id === expense.id ? entry : item); else user.monthlyExpenses.push(entry); if (oldMonth) { refreshMonthSnapshotTotal(user, oldMonth); refreshMonthSnapshotTotal(user, shiftMonth(oldMonth, 1)); } refreshMonthSnapshotTotal(user, entryMonth); refreshMonthSnapshotTotal(user, shiftMonth(entryMonth, 1)); viewMonth = entryMonth; persistUser(user); closeModal(); renderDashboard(); showToast(expense ? '本月開銷已更新' : '本月開銷已新增'); });
-  currentModal.querySelector('#delete-monthly-expense')?.addEventListener('click', () => { const user = getUser(), expenseMonth = periodMonthForDate(expense.date, periodStartDay(user)); user.monthlyExpenses = user.monthlyExpenses.filter(item => item.id !== expense.id); refreshMonthSnapshotTotal(user, expenseMonth); refreshMonthSnapshotTotal(user, shiftMonth(expenseMonth, 1)); persistUser(user); closeModal(); renderDashboard(); showToast('本月開銷已刪除'); });
+  monthlyExpenseForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = new FormData(monthlyExpenseForm), user = getUser(), startDay = periodStartDay(user), oldMonth = expense ? periodMonthForDate(expense.date, startDay) : null, amount = amountFromForm(monthlyExpenseForm, 'amount'), payment = String(form.get('payment'));
+    if (amount === null) return;
+    const entry = { id: expense?.id || crypto.randomUUID(), name: payment === 'card' ? '信用卡消費' : '現金開銷', amount, date: String(form.get('date')), payment, category: '' };
+    const entryMonth = periodMonthForDate(entry.date, startDay);
+    if (expense) user.monthlyExpenses = user.monthlyExpenses.map(item => item.id === expense.id ? entry : item);
+    else user.monthlyExpenses.push(entry);
+    if (oldMonth) { refreshMonthSnapshotTotal(user, oldMonth); refreshMonthSnapshotTotal(user, shiftMonth(oldMonth, 1)); }
+    refreshMonthSnapshotTotal(user, entryMonth);
+    refreshMonthSnapshotTotal(user, shiftMonth(entryMonth, 1));
+    viewMonth = entryMonth;
+    if (!await saveUserImmediately(user, event.submitter)) return;
+    closeModal();
+    renderDashboard();
+    showToast(expense ? '本月開銷已儲存並同步' : '本月開銷已新增並同步');
+  });
+  currentModal.querySelector('#delete-monthly-expense')?.addEventListener('click', async event => {
+    const user = getUser(), expenseMonth = periodMonthForDate(expense.date, periodStartDay(user));
+    user.monthlyExpenses = user.monthlyExpenses.filter(item => item.id !== expense.id);
+    refreshMonthSnapshotTotal(user, expenseMonth);
+    refreshMonthSnapshotTotal(user, shiftMonth(expenseMonth, 1));
+    if (!await saveUserImmediately(user, event.currentTarget)) return;
+    closeModal();
+    renderDashboard();
+    showToast('本月開銷已刪除並同步');
+  });
 }
 
 function openAccountModal() {
@@ -2066,18 +2146,18 @@ function openAccountModal() {
     const previewUser = { periodStartDay: normalizePeriodStartDay(startDaySelect.value) };
     rangePreview.textContent = `${monthText(viewMonth)}：${periodRangeText(viewMonth, previewUser)}`;
   });
-  settingsForm.addEventListener('submit', event => {
+  settingsForm.addEventListener('submit', async event => {
     event.preventDefault();
     user.periodStartDay = normalizePeriodStartDay(new FormData(settingsForm).get('periodStartDay'));
     viewMonth = todayMonth(user);
-    persistUser(user);
+    if (!await saveUserImmediately(user, event.submitter)) return;
     closeModal();
     renderDashboard();
-    showToast(`每月區間已改為 ${periodRangeText(viewMonth, user)}`);
+    showToast(`每月區間已儲存並同步：${periodRangeText(viewMonth, user)}`);
   });
   currentModal.querySelector('#confirm-logout').addEventListener('click', async () => {
-    window.clearTimeout(cloudSyncTimer);
     stopMarketQuoteUpdates();
+    await cloudSyncQueue.catch(() => false);
     await syncBookToCloud({ quiet: true });
     await supabaseClient?.auth.signOut();
     activeUser = null;
@@ -2088,14 +2168,17 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=52').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=53').then(registration => registration.update());
 });
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && activeUser && Date.now() - lastMarketQuoteRefreshAt >= MARKET_QUOTE_REFRESH_MS) {
-    runMarketQuoteRefresh();
-  }
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !activeUser) return;
+  await refreshCloudBookWhenVisible({ force: true });
+  if (Date.now() - lastMarketQuoteRefreshAt >= MARKET_QUOTE_REFRESH_MS) runMarketQuoteRefresh();
 });
+
+window.addEventListener('focus', () => refreshCloudBookWhenVisible());
+window.addEventListener('pageshow', () => refreshCloudBookWhenVisible());
 
 async function startApp() {
   if (!supabaseClient) { renderCloudSetupError('無法載入雲端服務。請重新整理後再試。'); return; }

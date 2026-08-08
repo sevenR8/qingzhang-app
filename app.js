@@ -39,6 +39,7 @@ let marketQuoteStartupTimer;
 let marketQuoteRefreshInFlight = false;
 let lastMarketQuoteRefreshAt = 0;
 let marketQuoteRefreshGeneration = 0;
+let mobileRefreshInFlight = null;
 let monthPageDirection = 0;
 const MARKET_QUOTE_REFRESH_MS = 5 * 60 * 1000;
 
@@ -754,7 +755,7 @@ async function loadCloudBook(authUser) {
   startMarketQuoteUpdates();
 }
 
-function refreshCloudBookWhenVisible({ force = false } = {}) {
+function refreshCloudBookWhenVisible({ force = false, render = true, notify = true } = {}) {
   if (!supabaseClient || !activeUser?.id || currentModal || document.visibilityState !== 'visible') return Promise.resolve(false);
   if (cloudBookRefreshPromise) return cloudBookRefreshPromise;
   if (!force && Date.now() - lastCloudBookRefreshAt < 1500) return Promise.resolve(false);
@@ -773,8 +774,8 @@ function refreshCloudBookWhenVisible({ force = false } = {}) {
     activeUser = makeUserFromCloud(authUser, data);
     lastCloudBookUpdatedAt = remoteUpdatedAt;
     cacheBook(activeUser);
-    renderDashboard();
-    showToast('已載入雲端最新資料');
+    if (render) renderDashboard();
+    if (notify) showToast('已載入雲端最新資料');
     return true;
   })().finally(() => { cloudBookRefreshPromise = null; });
   return cloudBookRefreshPromise;
@@ -877,6 +878,7 @@ function renderDashboard() {
   const monthPageClass = monthPageDirection > 0 ? 'month-page-next' : monthPageDirection < 0 ? 'month-page-previous' : '';
   const monthDateClass = monthPageDirection ? 'month-date-flash' : '';
   app.innerHTML = `
+    <div class="pull-refresh" aria-hidden="true"><span class="pull-refresh-icon">↻</span><span class="pull-refresh-text">下拉更新</span></div>
     <main class="app-shell ${monthPageClass}">
       <header class="topbar">
         <div class="brand" aria-label="青"><span class="brand-mark">青</span></div>
@@ -974,6 +976,7 @@ function drawChart(history) {
 
 function bindDashboard() {
   bindFixedExpenseSorting();
+  bindMobilePullToRefresh();
   bindMobileMonthSwipe();
   document.querySelectorAll('[data-month-shift]').forEach(button => button.addEventListener('click', () => {
     const direction = Number(button.dataset.monthShift);
@@ -992,6 +995,116 @@ function bindDashboard() {
   document.querySelector('#mobile-overview').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
   document.querySelector('#mobile-history').addEventListener('click', () => document.querySelector('.chart-card').scrollIntoView({ behavior: 'smooth', block: 'center' }));
   document.querySelector('#mobile-expense').addEventListener('click', () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
+}
+
+function bindMobilePullToRefresh() {
+  const shell = document.querySelector('.app-shell');
+  const indicator = document.querySelector('.pull-refresh');
+  const indicatorText = indicator?.querySelector('.pull-refresh-text');
+  const indicatorIcon = indicator?.querySelector('.pull-refresh-icon');
+  if (!shell || !indicator || !indicatorText || !indicatorIcon) return;
+  const threshold = 62;
+  const maxDistance = 98;
+  let pull = null;
+
+  const canStart = () => window.matchMedia('(max-width: 699px)').matches && !currentModal && !mobileRefreshInFlight && window.scrollY <= 1;
+  const start = (x, y) => {
+    if (!canStart()) return;
+    pull = { x, y, distance: 0, active: false, cancelled: false };
+  };
+  const move = (x, y, event) => {
+    if (!pull || pull.cancelled) return;
+    const dx = x - pull.x;
+    const dy = y - pull.y;
+    if (!pull.active) {
+      if (dy < 0 || Math.abs(dx) > Math.max(12, dy)) { pull.cancelled = true; return; }
+      if (dy < 7) return;
+      if (window.scrollY > 1) { pull.cancelled = true; return; }
+      pull.active = true;
+      shell.classList.add('pull-refresh-dragging');
+      document.body.classList.add('pull-refresh-active');
+    }
+    event.preventDefault();
+    const distance = Math.min(maxDistance, Math.max(0, dy) * .5);
+    pull.distance = distance;
+    shell.style.transform = `translateY(${distance}px)`;
+    indicator.style.setProperty('--pull-progress', String(Math.min(1, distance / threshold)));
+    indicatorIcon.style.transform = `rotate(${Math.round(distance / threshold * 190)}deg)`;
+    const ready = distance >= threshold;
+    document.body.classList.toggle('pull-refresh-ready', ready);
+    indicatorText.textContent = ready ? '放開立即更新' : '繼續下拉更新';
+  };
+  const reset = () => {
+    document.body.classList.remove('pull-refresh-active', 'pull-refresh-ready', 'pull-refresh-running', 'pull-refresh-complete');
+    shell.classList.remove('pull-refresh-dragging');
+    shell.classList.add('pull-refresh-settling');
+    shell.style.transform = 'translateY(0)';
+    window.setTimeout(() => {
+      shell.classList.remove('pull-refresh-settling');
+      shell.style.removeProperty('transform');
+      indicator.style.removeProperty('--pull-progress');
+      indicatorIcon.style.removeProperty('transform');
+    }, 260);
+  };
+  const finish = async () => {
+    const gesture = pull;
+    pull = null;
+    if (!gesture?.active) return;
+    if (gesture.distance < threshold) { reset(); return; }
+    document.body.classList.remove('pull-refresh-ready');
+    document.body.classList.add('pull-refresh-running');
+    shell.classList.remove('pull-refresh-dragging');
+    shell.classList.add('pull-refresh-settling');
+    shell.style.transform = 'translateY(54px)';
+    indicatorText.textContent = '正在更新最新資料…';
+    indicatorIcon.style.removeProperty('transform');
+    let cloudUpdated = false;
+    let marketUpdated = false;
+    let refreshFailed = false;
+    mobileRefreshInFlight = (async () => {
+      cloudUpdated = await refreshCloudBookWhenVisible({ force: true, render: false, notify: false });
+      marketUpdated = await runMarketQuoteRefresh({ renderUi: false });
+    })();
+    try {
+      await mobileRefreshInFlight;
+      indicatorText.textContent = '更新完成';
+      document.body.classList.add('pull-refresh-complete');
+      await new Promise(resolve => window.setTimeout(resolve, 180));
+    } catch (error) {
+      refreshFailed = true;
+      console.error('Pull to refresh failed', error);
+    } finally {
+      mobileRefreshInFlight = null;
+      reset();
+      renderDashboard();
+      showToast(refreshFailed ? '更新失敗，請確認網路後再試' : cloudUpdated || marketUpdated ? '已更新最新資料' : '目前已是最新資料');
+    }
+  };
+
+  shell.addEventListener('touchstart', event => {
+    if (event.touches.length !== 1) return;
+    start(event.touches[0].clientX, event.touches[0].clientY);
+  }, { passive: true });
+  shell.addEventListener('touchmove', event => {
+    if (event.touches.length !== 1) return;
+    move(event.touches[0].clientX, event.touches[0].clientY, event);
+  }, { passive: false });
+  shell.addEventListener('touchend', finish, { passive: true });
+  shell.addEventListener('touchcancel', () => { pull = null; reset(); }, { passive: true });
+  shell.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'touch' || event.isPrimary === false || event.button !== 0) return;
+    start(event.clientX, event.clientY);
+  });
+  shell.addEventListener('pointermove', event => {
+    if (event.pointerType === 'touch') return;
+    move(event.clientX, event.clientY, event);
+  });
+  shell.addEventListener('pointerup', event => {
+    if (event.pointerType !== 'touch') finish();
+  });
+  shell.addEventListener('pointercancel', event => {
+    if (event.pointerType !== 'touch') { pull = null; reset(); }
+  });
 }
 
 function bindMobileMonthSwipe() {
@@ -1742,7 +1855,7 @@ async function freezeHistoricalMarketQuotes() {
   return changed;
 }
 
-async function runMarketQuoteRefresh({ includeHistory = false } = {}) {
+async function runMarketQuoteRefresh({ includeHistory = false, renderUi = true } = {}) {
   if (!activeUser || marketQuoteRefreshInFlight || document.visibilityState === 'hidden') return false;
   const refreshGeneration = marketQuoteRefreshGeneration;
   const refreshUserId = activeUser.id;
@@ -1760,8 +1873,8 @@ async function runMarketQuoteRefresh({ includeHistory = false } = {}) {
     if (includeHistory && await freezeHistoricalMarketQuotes()) changed = true;
     if (refreshGeneration !== marketQuoteRefreshGeneration || activeUser?.id !== refreshUserId) return false;
     if (changed) {
-      persistUser(getUser());
-      renderDashboard();
+      await persistUser(getUser(), { quiet: true });
+      if (renderUi) renderDashboard();
     }
     return changed;
   } finally {
@@ -2168,7 +2281,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=53').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=54').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

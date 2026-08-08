@@ -1058,12 +1058,10 @@ function bindMobilePullToRefresh() {
     shell.style.transform = 'translateY(54px)';
     indicatorText.textContent = '正在更新最新資料…';
     indicatorIcon.style.removeProperty('transform');
-    let cloudUpdated = false;
-    let marketUpdated = false;
     let refreshFailed = false;
     mobileRefreshInFlight = (async () => {
-      cloudUpdated = await refreshCloudBookWhenVisible({ force: true, render: false, notify: false });
-      marketUpdated = await runMarketQuoteRefresh({ renderUi: false });
+      await refreshCloudBookWhenVisible({ force: true, render: false, notify: false });
+      await runMarketQuoteRefresh({ renderUi: false });
     })();
     try {
       await mobileRefreshInFlight;
@@ -1077,7 +1075,7 @@ function bindMobilePullToRefresh() {
       mobileRefreshInFlight = null;
       reset();
       renderDashboard();
-      showToast(refreshFailed ? '更新失敗，請確認網路後再試' : cloudUpdated || marketUpdated ? '已更新最新資料' : '目前已是最新資料');
+      if (refreshFailed) showToast('更新失敗，請確認網路後再試');
     }
   };
 
@@ -2281,7 +2279,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=54').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=55').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

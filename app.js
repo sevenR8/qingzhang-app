@@ -58,6 +58,10 @@ function normalizeUser(user) {
   user.periodStartDay = normalizePeriodStartDay(user.periodStartDay);
   user.incomes ||= {};
   user.monthlyExpenses ||= [];
+  if (!user.cardPaymentByMonth || typeof user.cardPaymentByMonth !== 'object' || Array.isArray(user.cardPaymentByMonth)) user.cardPaymentByMonth = {};
+  Object.entries(user.cardPaymentByMonth).forEach(([month, state]) => {
+    user.cardPaymentByMonth[month] = normalizeCreditCardPaymentState(state);
+  });
   user.assets ||= emptyAssets();
   user.expenses ||= [];
   user.history ||= [];
@@ -548,7 +552,27 @@ function expensesForMonth(user, month = todayMonth(user)) { return user.monthlyE
 function fixedExpenseTotal(user, month = viewMonth) { return fixedExpensesForMonth(user, month).reduce((sum, item) => sum + Number(item.amount || 0), 0); }
 function cashExpenseTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'cash').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
 function creditCardSpendTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'card').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
-function creditCardPaymentDue(user, month = viewMonth) { return creditCardSpendTotal(user, previousMonth(month)); }
+function normalizeCreditCardPaymentState(state, fallbackManualTotal = 0) {
+  const normalized = state && typeof state === 'object' ? state : {};
+  normalized.mode = normalized.mode === 'manual' ? 'manual' : 'previous';
+  if (!Number.isFinite(Number(normalized.manualTotal))) normalized.manualTotal = Number(fallbackManualTotal || 0);
+  return normalized;
+}
+function creditCardPaymentState(user, month = viewMonth, { create = true } = {}) {
+  user.cardPaymentByMonth ||= {};
+  let state = user.cardPaymentByMonth[month];
+  const previousSpend = creditCardSpendTotal(user, previousMonth(month));
+  if (!state && create) {
+    state = normalizeCreditCardPaymentState({ mode: 'previous', manualTotal: previousSpend }, previousSpend);
+    user.cardPaymentByMonth[month] = state;
+  }
+  if (state) state = normalizeCreditCardPaymentState(state, previousSpend);
+  return state;
+}
+function creditCardPaymentDue(user, month = viewMonth) {
+  const state = creditCardPaymentState(user, month);
+  return state?.mode === 'manual' ? Number(state.manualTotal || 0) : creditCardSpendTotal(user, previousMonth(month));
+}
 function incomeTotalForMonth(user, month = viewMonth) {
   const income = incomeForMonth(user, month);
   return Number(income.salary || 0) + Number(income.other || 0);
@@ -605,6 +629,7 @@ function defaultUser(name, email) {
     expenses: [],
     incomes: {},
     monthlyExpenses: [],
+    cardPaymentByMonth: {},
     cashMode: 'manual',
     cashManualTotal: 0,
     cashByMonth: {},
@@ -659,6 +684,7 @@ function bookPayload(user) {
     expenses: user.expenses,
     incomes: user.incomes,
     monthlyExpenses: user.monthlyExpenses,
+    cardPaymentByMonth: user.cardPaymentByMonth,
     cashMode: user.cashMode,
     cashManualTotal: user.cashManualTotal,
     cashByMonth: user.cashByMonth,
@@ -870,6 +896,7 @@ function renderDashboard() {
   const cashExpenses = cashExpenseTotal(user, viewMonth);
   const cardExpenses = creditCardSpendTotal(user, viewMonth);
   const cardPaymentDue = creditCardPaymentDue(user, viewMonth);
+  const cardPaymentSettings = creditCardPaymentState(user, viewMonth);
   const actualMonthlyOutgoings = fixedExpenses + cashExpenses + cardPaymentDue;
   const monthlyBalance = thisMonthIncomeTotal - actualMonthlyOutgoings;
   const endingCash = endingCashForMonth(user, viewMonth);
@@ -906,7 +933,7 @@ function renderDashboard() {
           <section class="expense-card" id="expenses">${renderExpenses(viewedFixedExpenses)}</section>
           <div class="section-heading"><div><h2>本月開銷</h2><p>${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}</p></div><button class="text-button" id="add-monthly-expense-button">＋ 記一筆</button></div>
           <section class="expense-card" id="monthly-expenses">${renderMonthlyExpenses(thisMonthExpenses)}</section>
-          <section class="card-payment-card"><div><span>本月信用卡應繳</span><small>${monthText(previousMonth(viewMonth))}信用卡消費 · ${viewMonth}-25 繳納</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></section>
+          <button class="card-payment-card" id="card-payment-button" type="button"><div><span>本月信用卡應繳</span><small>${cardPaymentSettings.mode === 'manual' ? '自行填寫' : `沿用${monthText(previousMonth(viewMonth))}信用卡開銷`} · 點選設定</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></button>
           <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div></section>
         </section>
       </div>
@@ -989,6 +1016,7 @@ function bindDashboard() {
   document.querySelector('#edit-income-button').addEventListener('click', openIncomeModal);
   document.querySelector('#add-expense-button').addEventListener('click', () => openExpenseModal());
   document.querySelector('#add-monthly-expense-button').addEventListener('click', () => openMonthlyExpenseModal());
+  document.querySelector('#card-payment-button').addEventListener('click', openCardPaymentModal);
   document.querySelectorAll('[data-asset]').forEach(button => button.addEventListener('click', () => openAssetModal(button.dataset.asset)));
   document.querySelectorAll('[data-expense]').forEach(button => button.addEventListener('click', () => openExpenseModal(button.dataset.expense)));
   document.querySelectorAll('[data-monthly-expense]').forEach(button => button.addEventListener('click', () => openMonthlyExpenseModal(button.dataset.monthlyExpense)));
@@ -2146,6 +2174,64 @@ function openBasicAssetModal(key) {
   });
 }
 
+function openCardPaymentModal() {
+  const user = getUser();
+  const month = viewMonth;
+  const state = creditCardPaymentState(user, month);
+  const previous = previousMonth(month);
+  const previousSpend = creditCardSpendTotal(user, previous);
+  const paymentDue = creditCardPaymentDue(user, month);
+  const summaryContent = state.mode === 'manual'
+    ? `<form id="card-payment-manual-form" class="tw-manual-total-form"><label for="card-payment-manual-total">自行填寫應繳金額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="card-payment-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：10722+500" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="card-payment-manual-preview">目前信用卡應繳 NT$ ${money(paymentDue)}</small><div class="form-error" id="card-payment-manual-error"></div></form>`
+    : `<span>沿用上個月信用卡開銷</span><strong>NT$ ${money(paymentDue)}</strong><small>${monthText(previous)}信用卡開銷 NT$ ${money(previousSpend)}，自動列為${monthText(month)}應繳金額</small>`;
+  const modes = [
+    { value: 'manual', title: '自行填寫', description: '自行輸入這個月份實際要繳的信用卡金額。' },
+    { value: 'previous', title: '沿用上個月信用卡開銷', description: `自動使用${monthText(previous)}記錄的信用卡開銷 NT$ ${money(previousSpend)}。` }
+  ];
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}信用卡</span><h2>本月信用卡應繳</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary card-payment-summary">${summaryContent}</section><div class="cash-mode-list" role="radiogroup" aria-label="信用卡應繳計算方式">${modes.map(mode => `<label class="tw-auto-switch cash-mode-option"><input type="radio" name="card-payment-mode" value="${mode.value}" ${state.mode === mode.value ? 'checked' : ''}><span><b>${mode.title}</b><small>${mode.description}</small></span></label>`).join('')}</div><p class="form-note tw-disclaimer">這項設定只影響${monthText(month)}，並會同步更新本月總開銷、收支結餘、現金與總資產。</p>`);
+  const manualForm = currentModal.querySelector('#card-payment-manual-form');
+  if (manualForm) {
+    const input = manualForm.querySelector('#card-payment-manual-total');
+    const preview = manualForm.querySelector('#card-payment-manual-preview');
+    const errorHost = manualForm.querySelector('#card-payment-manual-error');
+    input.addEventListener('input', () => {
+      errorHost.textContent = '';
+      if (!input.value.trim()) { preview.textContent = '可輸入 10722+500 等算式'; return; }
+      const amount = calculateAmount(input.value);
+      preview.textContent = amount === null ? '請使用數字與 + − × ÷ ( )' : `計算結果：NT$ ${money(amount)}`;
+    });
+    manualForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const amount = calculateAmount(input.value);
+      if (amount === null) {
+        errorHost.textContent = '請輸入可計算的非負金額。';
+        input.focus();
+        return;
+      }
+      const user = getUser();
+      const state = creditCardPaymentState(user, month);
+      state.manualTotal = amount;
+      state.mode = 'manual';
+      refreshMonthSnapshotTotal(user, month);
+      if (!await saveUserImmediately(user, event.submitter)) return;
+      renderDashboard();
+      openCardPaymentModal();
+      showToast('信用卡應繳金額已儲存並同步');
+    });
+  }
+  currentModal.querySelectorAll('input[name="card-payment-mode"]').forEach(input => input.addEventListener('change', async event => {
+    if (!event.target.checked) return;
+    const user = getUser();
+    const state = creditCardPaymentState(user, month);
+    state.mode = event.target.value === 'manual' ? 'manual' : 'previous';
+    refreshMonthSnapshotTotal(user, month);
+    if (!await saveUserImmediately(user)) return;
+    renderDashboard();
+    openCardPaymentModal();
+    showToast(state.mode === 'manual' ? '已改為自行填寫信用卡應繳' : '已沿用上個月信用卡開銷');
+  }));
+}
+
 function openAssetsModal() {
   const user = getUser();
   const assets = assetsForMonth(user, viewMonth), gross = grossAssets(user, viewMonth), cashExpenses = cashExpenseTotal(user, viewMonth), cardDue = creditCardPaymentDue(user, viewMonth), cardSpending = creditCardSpendTotal(user, viewMonth), fixed = fixedExpenseTotal(user, viewMonth), total = totalAssets(user, viewMonth);
@@ -2279,7 +2365,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=55').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=56').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

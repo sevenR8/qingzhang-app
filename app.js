@@ -148,6 +148,28 @@ function holdingSummaryMarkup(metrics) {
   const percent = metrics.totalPercent === null ? '請先填妥每筆成本' : `（${metrics.totalPercent >= 0 ? '+' : '−'}${Math.abs(metrics.totalPercent).toFixed(2)}%）`;
   return `<div class="holding-summary-metrics"><div><span>總現值（TWD）</span><strong>NT$ ${money(metrics.totalValue)}</strong></div><div><span>總成本</span><strong>${metrics.totalCost === null ? '—' : `NT$ ${money(metrics.totalCost)}`}</strong></div><div class="holding-summary-profit ${profitClass}"><span>總損益</span><strong>${profit}</strong><small>${percent}</small></div></div>`;
 }
+function assetCardProfit(user, key, month) {
+  if (key === 'tw') {
+    const state = twStockState(user, month, { create: false });
+    return state?.mode === 'holdings' ? holdingMetrics(state.holdings, holdingMarketValue) : null;
+  }
+  if (key === 'us') {
+    const state = usStockState(user, month, { create: false });
+    return state?.mode === 'holdings' ? holdingMetrics(state.holdings, usHoldingMarketValue, 'shares', 1, usHoldingCostValue) : null;
+  }
+  if (key === 'crypto') {
+    const state = cryptoState(user, month, { create: false });
+    return state?.mode === 'holdings' ? holdingMetrics(state.holdings, cryptoHoldingMarketValue, 'amount', 1, cryptoHoldingCostValue) : null;
+  }
+  return null;
+}
+function assetCardProfitMarkup(metrics) {
+  if (!metrics || metrics.totalProfit === null) return '';
+  const className = metrics.totalProfit >= 0 ? 'positive' : 'negative';
+  const sign = metrics.totalProfit >= 0 ? '+' : '−';
+  const percentSign = metrics.totalPercent >= 0 ? '+' : '−';
+  return `<span class="asset-profit ${className}">${sign}NT$ ${money(Math.abs(metrics.totalProfit))}（${percentSign}${Math.abs(metrics.totalPercent).toFixed(2)}%）</span>`;
+}
 function cloneTwHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
 function normalizeTwStockState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
@@ -985,7 +1007,7 @@ function renderDashboard() {
         <section>
           <div class="section-heading"><div><h2>資產配置</h2><p>點選卡片，更新目前總價</p></div><button class="text-button" id="asset-summary-button">查看明細</button></div>
           <div class="asset-grid">${Object.entries(assetMeta).map(([key, meta]) => `
-            <button class="asset-card ${meta.className}" data-asset="${key}"><span class="asset-icon">${meta.icon}</span><small>${meta.label}</small><strong>$ ${money(viewedAssets[key])}</strong><span class="edit-hint">更新 ${monthText(viewMonth)} →</span></button>`).join('')}</div>
+            <button class="asset-card ${meta.className}" data-asset="${key}"><span class="asset-icon">${meta.icon}</span><small>${meta.label}</small><strong>$ ${money(viewedAssets[key])}</strong>${assetCardProfitMarkup(assetCardProfit(user, key, viewMonth))}<span class="edit-hint">更新 ${monthText(viewMonth)} →</span></button>`).join('')}</div>
           <div class="section-heading"><div><h2>資產趨勢</h2><p>每一格代表 NT$100,000</p></div><button class="text-button" id="history-button">編輯紀錄</button></div>
           <section class="chart-card"><div class="chart-header"><div><h3>總資產變化</h3><span>${chartHistory.length > 1 ? `已追蹤 ${chartHistory.length} 個月份` : '同步本月資產後，會顯示走勢'}</span></div><span class="chart-caption">NT$ 100K / 格</span></div><div id="asset-chart" class="chart-wrap"></div></section>
         </section>

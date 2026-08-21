@@ -83,7 +83,7 @@ input:focus, select:focus { border-color: #76a59a; box-shadow: 0 0 0 3px rgba(77
 .section-heading > .text-button { flex: 0 0 auto; }
 
 .asset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.asset-card { text-align: left; border: 1px solid var(--line); border-radius: 17px; padding: 15px; min-height: 126px; background: var(--card); box-shadow: 0 3px 12px rgba(33,55,50,.03); position: relative; overflow: hidden; }
+.asset-card { text-align: left; border: 1px solid var(--line); border-radius: 17px; padding: 15px; min-height: 146px; background: var(--card); box-shadow: 0 3px 12px rgba(33,55,50,.03); position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; }
 .asset-card:hover { border-color: #b8cbc2; transform: translateY(-1px); }
 .asset-card::after { content: ''; width: 57px; height: 57px; position: absolute; border-radius: 50%; right: -18px; top: -18px; opacity: .5; }
 .asset-card.cash::after { background: var(--lime); }.asset-card.tw::after { background: #ffd586; }.asset-card.us::after { background: var(--lavender); }.asset-card.crypto::after { background: #ffc5b5; }
@@ -91,7 +91,9 @@ input:focus, select:focus { border-color: #76a59a; box-shadow: 0 0 0 3px rgba(77
 .cash .asset-icon { background: #f2f8bf; }.tw .asset-icon { background: #fff2d2; }.us .asset-icon { background: #edeaff; }.crypto .asset-icon { background: #ffe3da; }
 .asset-card small { color: var(--muted); display: block; font-size: 12px; }
 .asset-card strong { font-family: 'DM Mono', monospace; margin-top: 5px; font-size: 16px; display: block; letter-spacing: -.04em; }
-.asset-card .edit-hint { color: #5d7b72; font-size: 11px; margin-top: 5px; }
+.asset-card .asset-profit { display: block; margin-top: 4px; font: 500 11px 'DM Mono', monospace; white-space: nowrap; }
+.asset-card .asset-profit.positive { color: #d3483d; }.asset-card .asset-profit.negative { color: #3b7d6d; }
+.asset-card .edit-hint { color: #789088; font-size: 9px; margin-top: auto; padding-top: 8px; }
 
 .chart-card, .expense-card, .income-card { background: var(--card); border-radius: 21px; border: 1px solid var(--line); box-shadow: 0 3px 12px rgba(33,55,50,.03); }
 .chart-card { padding: 20px 14px 14px; }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <link rel="stylesheet" href="../styles.css?v=62" />
+    <link rel="stylesheet" href="../styles.css?v=63" />
     <style>
       /* The test browser keeps a desktop viewport, so force the same layout
          rules that the affected narrow iPhone screen uses. */
@@ -30,8 +30,8 @@
           [currentMonth]: {
             mode: 'holdings', manualTotal: 0, holdingsCustomized: true, modeCustomized: true,
             holdings: [
-              { id: 'tw-2330', symbol: '2330', name: '台積電', shares: 53, price: 2405, priceSource: 'fugle', quoteAt: new Date().toISOString(), isClose: true },
-              { id: 'tw-2603', symbol: '2603', name: '長榮', shares: 10, price: 250, priceSource: 'fugle', quoteAt: new Date().toISOString(), isClose: true }
+              { id: 'tw-2330', symbol: '2330', name: '台積電', shares: 53, price: 2405, costPrice: 2000, priceSource: 'fugle', quoteAt: new Date().toISOString(), isClose: true },
+              { id: 'tw-2603', symbol: '2603', name: '長榮', shares: 10, price: 250, costPrice: 200, priceSource: 'fugle', quoteAt: new Date().toISOString(), isClose: true }
             ]
           }
         },
@@ -60,6 +60,9 @@
         const asset = document.querySelector('[data-asset="tw"]');
         if (!asset) return fail('台股卡片不存在');
         asset.click();
+        const summaryText = document.querySelector('.holding-summary-metrics')?.textContent || '';
+        if (!summaryText.includes('總成本') || summaryText.includes('總成本—') || !summaryText.includes('總損益')) return fail('持股總成本／總損益摘要不存在');
+        if (!document.querySelector('.holding-profit.positive')) return fail('個股損益未顯示');
         const edit = document.querySelector('[data-edit-tw-holding="tw-2330"]');
         if (!edit) return fail('修改按鈕不存在');
         const rect = edit.getBoundingClientRect();
@@ -79,6 +82,6 @@
         }, 350);
       }, 150));
     </script>
-    <script src="../app.js?v=62-test"></script>
+    <script src="../app.js?v=63-test"></script>
   </body>
 </html>

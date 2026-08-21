@@ -118,6 +118,36 @@ function normalizeStockSymbol(value) {
   return normalized.match(/^[0-9A-Z]{4,6}/)?.[0] || '';
 }
 function holdingMarketValue(holding) { return Number(holding.shares || 0) * Number(holding.price || 0); }
+function holdingCostValue(holding, quantityKey = 'shares', multiplier = 1) {
+  const costPrice = Number(holding.costPrice);
+  const quantity = Number(holding[quantityKey] || 0);
+  return Number.isFinite(costPrice) && costPrice > 0 ? quantity * costPrice * multiplier : null;
+}
+function holdingProfitValue(holding, valueFn, quantityKey = 'shares', multiplier = 1, costFn = null) {
+  const cost = costFn ? costFn(holding) : holdingCostValue(holding, quantityKey, multiplier);
+  return cost === null ? null : Number(valueFn(holding) || 0) - cost;
+}
+function holdingProfitText(holding, valueFn, quantityKey = 'shares', multiplier = 1, costFn = null) {
+  const profit = holdingProfitValue(holding, valueFn, quantityKey, multiplier, costFn);
+  if (profit === null) return '尚未填寫成本';
+  const cost = costFn ? costFn(holding) : holdingCostValue(holding, quantityKey, multiplier);
+  const percent = cost > 0 ? (profit / cost) * 100 : 0;
+  return `損益 ${profit >= 0 ? '+' : '−'}NT$ ${money(Math.abs(profit))}（${profit >= 0 ? '+' : '−'}${Math.abs(percent).toFixed(2)}%）`;
+}
+function holdingMetrics(holdings, valueFn, quantityKey = 'shares', multiplier = 1, costFn = null) {
+  const values = holdings.map(holding => costFn ? costFn(holding) : holdingCostValue(holding, quantityKey, multiplier));
+  const totalValue = holdings.reduce((sum, holding) => sum + Number(valueFn(holding) || 0), 0);
+  const totalCost = values.every(value => value !== null) ? values.reduce((sum, value) => sum + value, 0) : null;
+  const totalProfit = totalCost === null ? null : totalValue - totalCost;
+  const totalPercent = totalProfit === null || totalCost <= 0 ? null : (totalProfit / totalCost) * 100;
+  return { totalValue, totalCost, totalProfit, totalPercent, missingCost: values.filter(value => value === null).length };
+}
+function holdingSummaryMarkup(metrics) {
+  const profitClass = metrics.totalProfit === null ? '' : metrics.totalProfit >= 0 ? 'positive' : 'negative';
+  const profit = metrics.totalProfit === null ? '—' : `${metrics.totalProfit >= 0 ? '+' : '−'}NT$ ${money(Math.abs(metrics.totalProfit))}`;
+  const percent = metrics.totalPercent === null ? '請先填妥每筆成本' : `（${metrics.totalPercent >= 0 ? '+' : '−'}${Math.abs(metrics.totalPercent).toFixed(2)}%）`;
+  return `<div class="holding-summary-metrics"><div><span>總現值（TWD）</span><strong>NT$ ${money(metrics.totalValue)}</strong></div><div><span>總成本</span><strong>${metrics.totalCost === null ? '—' : `NT$ ${money(metrics.totalCost)}`}</strong></div><div class="holding-summary-profit ${profitClass}"><span>總損益</span><strong>${profit}</strong><small>${percent}</small></div></div>`;
+}
 function cloneTwHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
 function normalizeTwStockState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
@@ -209,6 +239,7 @@ function normalizeUsStockSymbol(value) {
 function usHoldingMarketValue(holding) {
   return Number(holding.shares || 0) * Number(holding.price || 0) * Number(holding.exchangeRate || 0);
 }
+function usHoldingCostValue(holding) { return holdingCostValue(holding, 'shares', Number(holding.exchangeRate || 0)); }
 function cloneUsHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
 function normalizeUsStockState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
@@ -300,6 +331,7 @@ function normalizeCryptoSymbol(value) {
 function cryptoHoldingMarketValue(holding) {
   return Number(holding.amount || 0) * Number(holding.price || 0) * Number(holding.exchangeRate || 0);
 }
+function cryptoHoldingCostValue(holding) { return holdingCostValue(holding, 'amount', Number(holding.exchangeRate || 0)); }
 function cloneCryptoHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
 function normalizeCryptoState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
@@ -1496,6 +1528,7 @@ function openTwStockModal(editId = null) {
   const holdings = state.holdings;
   const editing = editId ? holdings.find(holding => holding.id === editId) : null;
   const estimatedTotal = twHoldingsTotal(user, month);
+  const metrics = holdingMetrics(holdings, holdingMarketValue);
   const modeIsHoldings = state.mode === 'holdings';
   const isCurrentMonth = month === todayMonth();
   const canRefreshQuotes = month >= todayMonth();
@@ -1504,13 +1537,14 @@ function openTwStockModal(editId = null) {
   persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · ${twQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(holdingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
+    const profit = holdingProfitValue(holding, holdingMarketValue);
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · 成本 ${holding.costPrice > 0 ? `NT$ ${stockPrice(holding.costPrice)}` : '未填'} · ${twQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><div class="holding-value"><b>NT$ ${money(holdingMarketValue(holding))}</b><small class="holding-profit ${profit === null ? '' : profit >= 0 ? 'positive' : 'negative'}">${holdingProfitText(holding, holdingMarketValue)}</small></div></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入持股。<br>輸入股票代碼與股數後，系統會估算目前市值。</p>';
   const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-tw-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : `<span class="tw-snapshot-note">已凍結為 ${dateText(historicalAsOf)} 以前最近交易日的收盤價</span>`;
   const summaryContent = modeIsHoldings
-    ? `<span>持股估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>已用此金額更新這個月份的台股總額</small>`
+    ? `${holdingSummaryMarkup(metrics)}<small>已用總現值更新這個月份的台股總額</small>`
     : `<form id="tw-manual-total-form" class="tw-manual-total-form"><label for="tw-manual-total">台股手動總額</label><div class="tw-manual-total-input"><span>NT$</span><input id="tw-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：121300+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="tw-manual-total-preview">目前使用手動總額 NT$ ${money(assets.tw)}</small><div class="form-error" id="tw-manual-total-error"></div></form>`;
-  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}台股資產</span><h2>台股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="tw-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新台股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="tw-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="tw-symbol">股票代碼</label><input id="tw-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：2330台積電" autocomplete="off" required maxlength="20"></div><div class="form-row"><label for="tw-shares">持有股數</label><input id="tw-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：22" min="1" step="1" required inputmode="numeric"></div></div><div class="form-error" id="tw-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-tw-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '只需輸入股票代碼與股數，系統會自動更新行情。' : '此月份尚未開始，先使用目前行情預估；進入該月份後會再更新。' : '歷史月份使用區間結束日前最近交易日的收盤價，持股清單仍可修改。'}</p>`);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}台股資產</span><h2>台股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="tw-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新台股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="tw-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="tw-symbol">股票代碼</label><input id="tw-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：2330台積電" autocomplete="off" required maxlength="20"></div><div class="form-row"><label for="tw-shares">持有股數</label><input id="tw-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：22" min="1" step="1" required inputmode="numeric"></div><div class="form-row holding-cost-field"><label for="tw-cost-price">購買成本價（每股 TWD）</label><input id="tw-cost-price" name="costPrice" type="number" value="${editing?.costPrice || ''}" placeholder="例如：2100" min="0.01" step="0.01" required inputmode="decimal"></div></div><div class="form-error" id="tw-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-tw-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '輸入股票代碼、股數與購買成本，系統會自動更新行情與損益。' : '此月份尚未開始，先使用目前行情預估；進入該月份後會再更新。' : '歷史月份使用區間結束日前最近交易日的收盤價，持股清單仍可修改。'}</p>`);
   currentModal.querySelector('#refresh-tw-quotes')?.addEventListener('click', () => refreshTwHoldingQuotes(null, { month }));
   const manualTotalForm = currentModal.querySelector('#tw-manual-total-form');
   if (manualTotalForm) {
@@ -1596,15 +1630,18 @@ function openTwStockModal(editId = null) {
     const symbol = normalizeStockSymbol(rawSymbol);
     const enteredName = rawSymbol.replace(/^[0-9A-Z]+/i, '').trim();
     const shares = Number(form.get('shares'));
+    const costPrice = Number(form.get('costPrice'));
     const errorHost = currentModal.querySelector('#tw-holding-error');
     if (!/^[0-9A-Z]{4,6}$/.test(symbol)) { errorHost.textContent = '請輸入正確的台股代碼，例如 2330。'; return; }
     if (!Number.isInteger(shares) || shares <= 0) { errorHost.textContent = '股數請輸入大於 0 的整數。'; return; }
+    if (!Number.isFinite(costPrice) || costPrice <= 0) { errorHost.textContent = '請輸入大於 0 的購買成本價。'; return; }
     if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這檔股票已在持股清單中。'; return; }
     const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, priceSource: '', quoteAt: '' };
     const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
     const savedHolding = !canRefreshQuotes && (!editing || symbolChanged) ? nearestSavedTwHolding(user, symbol, month) : null;
     holding.symbol = symbol;
     holding.shares = shares;
+    holding.costPrice = costPrice;
     if (enteredName) holding.name = enteredName;
     else if (savedHolding?.name) holding.name = savedHolding.name;
     else if (symbolChanged) holding.name = '';
@@ -1720,6 +1757,7 @@ function openUsStockModal(editId = null) {
   const holdings = state.holdings;
   const editing = editId ? holdings.find(holding => holding.id === editId) : null;
   const estimatedTotal = usHoldingsTotal(user, month);
+  const metrics = holdingMetrics(holdings, usHoldingMarketValue, 'shares', 1, usHoldingCostValue);
   const modeIsHoldings = state.mode === 'holdings';
   const isCurrentMonth = month === todayMonth();
   const canRefreshQuotes = month >= todayMonth();
@@ -1728,13 +1766,14 @@ function openUsStockModal(editId = null) {
   persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-us-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
+    const profit = holdingProfitValue(holding, usHoldingMarketValue, 'shares', 1, usHoldingCostValue);
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} · 成本 ${holding.costPrice > 0 ? `US$ ${stockPrice(holding.costPrice)}` : '未填'} · ${usQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><div class="holding-value"><b>NT$ ${money(usHoldingMarketValue(holding))}</b><small class="holding-profit ${profit === null ? '' : profit >= 0 ? 'positive' : 'negative'}">${holdingProfitText(holding, usHoldingMarketValue, 'shares', 1, usHoldingCostValue)}</small></div></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-us-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入美股持股。<br>輸入股票代碼與股數後，系統會換算為台幣市值。</p>';
   const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-us-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : `<span class="tw-snapshot-note">已凍結為 ${dateText(historicalAsOf)} 以前最近交易日的收盤價與匯率</span>`;
   const summaryContent = modeIsHoldings
-    ? `<span>持股估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>美元股價已依保存的 USD/TWD 匯率換算</small>`
+    ? `${holdingSummaryMarkup(metrics)}<small>美元股價與成本已依目前 USD/TWD 匯率換算</small>`
     : `<form id="us-manual-total-form" class="tw-manual-total-form"><label for="us-manual-total">美股手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="us-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：300000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="us-manual-total-preview">目前使用手動總額 NT$ ${money(assets.us)}</small><div class="form-error" id="us-manual-total-error"></div></form>`;
-  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}美股資產</span><h2>美股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="us-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新美股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="us-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="us-symbol">美股代碼</label><input id="us-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：AAPL" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="us-shares">持有股數</label><input id="us-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：10" min="0.0001" step="0.0001" required inputmode="decimal"></div></div><div class="form-error" id="us-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-us-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '系統會自動取得美元股價與 USD/TWD 匯率，再換算成台幣。' : '此月份尚未開始，先使用目前股價與匯率預估；進入該月份後會再更新。' : '歷史月份使用區間結束日前最近交易日的收盤價與匯率，持股清單仍可修改。'}</p>`);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}美股資產</span><h2>美股資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="us-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持股估值更新美股總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="us-holding-form" class="tw-holding-form"><h3>${editing ? '修改持股' : '新增持股'}</h3><div class="tw-form-grid"><div class="form-row"><label for="us-symbol">美股代碼</label><input id="us-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：AAPL" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="us-shares">持有股數</label><input id="us-shares" name="shares" type="number" value="${editing?.shares || ''}" placeholder="例如：10" min="0.0001" step="0.0001" required inputmode="decimal"></div><div class="form-row holding-cost-field"><label for="us-cost-price">購買成本價（每股 USD）</label><input id="us-cost-price" name="costPrice" type="number" value="${editing?.costPrice || ''}" placeholder="例如：420.50" min="0.0001" step="0.0001" required inputmode="decimal"></div></div><div class="form-error" id="us-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-us-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持股' : '加入持股'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '系統會自動取得美元股價與 USD/TWD 匯率，再換算成台幣。' : '此月份尚未開始，先使用目前股價與匯率預估；進入該月份後會再更新。' : '歷史月份使用區間結束日前最近交易日的收盤價與匯率，持股清單仍可修改。'}</p>`);
   currentModal.querySelector('#refresh-us-quotes')?.addEventListener('click', () => refreshUsHoldingQuotes(null, { month }));
   const manualTotalForm = currentModal.querySelector('#us-manual-total-form');
   if (manualTotalForm) {
@@ -1818,15 +1857,18 @@ function openUsStockModal(editId = null) {
     const form = new FormData(holdingForm);
     const symbol = normalizeUsStockSymbol(form.get('symbol'));
     const shares = Number(form.get('shares'));
+    const costPrice = Number(form.get('costPrice'));
     const errorHost = currentModal.querySelector('#us-holding-error');
     if (!symbol) { errorHost.textContent = '請輸入正確的美股代碼，例如 AAPL 或 BRK.B。'; return; }
     if (!Number.isFinite(shares) || shares <= 0) { errorHost.textContent = '股數請輸入大於 0 的數字。'; return; }
+    if (!Number.isFinite(costPrice) || costPrice <= 0) { errorHost.textContent = '請輸入大於 0 的購買成本價。'; return; }
     if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這檔股票已在持股清單中。'; return; }
     const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, exchangeRate: 0, priceSource: '', quoteAt: '' };
     const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
     const savedHolding = !canRefreshQuotes && (!editing || symbolChanged) ? nearestSavedUsHolding(user, symbol, month) : null;
     holding.symbol = symbol;
     holding.shares = shares;
+    holding.costPrice = costPrice;
     if (!canRefreshQuotes && (!editing || symbolChanged)) {
       holding.name = savedHolding?.name || symbol;
       holding.price = Number(savedHolding?.price || 0);
@@ -2072,6 +2114,7 @@ function openCryptoModal(editId = null) {
   const holdings = state.holdings;
   const editing = editId ? holdings.find(holding => holding.id === editId) : null;
   const estimatedTotal = cryptoHoldingsTotal(user, month);
+  const metrics = holdingMetrics(holdings, cryptoHoldingMarketValue, 'amount', 1, cryptoHoldingCostValue);
   const modeIsHoldings = state.mode === 'holdings';
   const isCurrentMonth = month === todayMonth();
   const canRefreshQuotes = month >= todayMonth();
@@ -2080,13 +2123,14 @@ function openCryptoModal(editId = null) {
   persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${cryptoAmount(holding.amount)} 枚 × US$ ${cryptoPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${cryptoQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(cryptoHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-crypto-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-crypto-holding="${holding.id}">刪除</button></div></article>`;
+    const profit = holdingProfitValue(holding, cryptoHoldingMarketValue, 'amount', 1, cryptoHoldingCostValue);
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${cryptoAmount(holding.amount)} 枚 × US$ ${cryptoPrice(holding.price)} · 成本 ${holding.costPrice > 0 ? `US$ ${cryptoPrice(holding.costPrice)}` : '未填'} · ${cryptoQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><div class="holding-value"><b>NT$ ${money(cryptoHoldingMarketValue(holding))}</b><small class="holding-profit ${profit === null ? '' : profit >= 0 ? 'positive' : 'negative'}">${holdingProfitText(holding, cryptoHoldingMarketValue, 'amount', 1, cryptoHoldingCostValue)}</small></div></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-crypto-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-crypto-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入加密貨幣。<br>輸入幣種代碼與持有數量後，系統會換算為台幣市值。</p>';
   const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-crypto-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : `<span class="tw-snapshot-note">已凍結為 ${dateText(historicalAsOf)} 的收盤價與最近匯率</span>`;
   const summaryContent = modeIsHoldings
-    ? `<span>持幣估算總額</span><strong>NT$ ${money(estimatedTotal)}</strong><small>美元幣價已依保存的 USD/TWD 匯率換算</small>`
+    ? `${holdingSummaryMarkup(metrics)}<small>美元幣價與成本已依目前 USD/TWD 匯率換算</small>`
     : `<form id="crypto-manual-total-form" class="tw-manual-total-form"><label for="crypto-manual-total">加密貨幣手動總額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="crypto-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：200000+5000" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="crypto-manual-total-preview">目前使用手動總額 NT$ ${money(assets.crypto)}</small><div class="form-error" id="crypto-manual-total-error"></div></form>`;
-  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}加密貨幣資產</span><h2>加密貨幣資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="crypto-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持幣估值更新加密貨幣總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="crypto-holding-form" class="tw-holding-form"><h3>${editing ? '修改持幣' : '新增持幣'}</h3><div class="tw-form-grid"><div class="form-row"><label for="crypto-symbol">幣種代碼</label><input id="crypto-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：BTC" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="crypto-amount">持有數量</label><input id="crypto-amount" name="amount" type="number" value="${editing?.amount || ''}" placeholder="例如：0.05" min="0.00000001" step="any" required inputmode="decimal"></div></div><div class="form-error" id="crypto-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-crypto-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持幣' : '加入持幣'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '系統會自動取得美元幣價與 USD/TWD 匯率，再換算成台幣。' : '此月份尚未開始，先使用目前幣價與匯率預估；進入該月份後會再更新。' : '歷史月份使用區間結束日的收盤價與最近匯率，持幣清單仍可修改。'}</p>`);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}加密貨幣資產</span><h2>加密貨幣資產</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary">${summaryContent}</section><label class="tw-auto-switch"><input id="crypto-auto-mode" type="checkbox" ${modeIsHoldings ? 'checked' : ''}><span><b>用持幣估值更新加密貨幣總額</b><small>只會影響 ${monthText(month)}，其他月份不會改變。</small></span></label><div class="tw-stock-toolbar">${quoteToolbar}</div><section class="tw-holding-list">${rows}</section><form id="crypto-holding-form" class="tw-holding-form"><h3>${editing ? '修改持幣' : '新增持幣'}</h3><div class="tw-form-grid"><div class="form-row"><label for="crypto-symbol">幣種代碼</label><input id="crypto-symbol" name="symbol" value="${escapeHTML(editing?.symbol || '')}" placeholder="例如：BTC" autocomplete="off" required maxlength="10"></div><div class="form-row"><label for="crypto-amount">持有數量</label><input id="crypto-amount" name="amount" type="number" value="${editing?.amount || ''}" placeholder="例如：0.05" min="0.00000001" step="any" required inputmode="decimal"></div><div class="form-row holding-cost-field"><label for="crypto-cost-price">購買成本價（每枚 USD）</label><input id="crypto-cost-price" name="costPrice" type="number" value="${editing?.costPrice || ''}" placeholder="例如：65000" min="0.00000001" step="any" required inputmode="decimal"></div></div><div class="form-error" id="crypto-holding-error"></div><div class="tw-form-actions">${editing ? '<button class="button light" id="cancel-crypto-edit" type="button">取消修改</button>' : ''}<button class="button primary" type="submit">${editing ? '儲存持幣' : '加入持幣'}</button></div></form><p class="form-note tw-disclaimer">${canRefreshQuotes ? isCurrentMonth ? '系統會自動取得美元幣價與 USD/TWD 匯率，再換算成台幣。' : '此月份尚未開始，先使用目前幣價與匯率預估；進入該月份後會再更新。' : '歷史月份使用區間結束日的收盤價與最近匯率，持幣清單仍可修改。'}</p>`);
   currentModal.querySelector('#refresh-crypto-quotes')?.addEventListener('click', () => refreshCryptoQuotes(null, { month }));
   const manualTotalForm = currentModal.querySelector('#crypto-manual-total-form');
   if (manualTotalForm) {
@@ -2170,15 +2214,18 @@ function openCryptoModal(editId = null) {
     const form = new FormData(holdingForm);
     const symbol = normalizeCryptoSymbol(form.get('symbol'));
     const amount = Number(form.get('amount'));
+    const costPrice = Number(form.get('costPrice'));
     const errorHost = currentModal.querySelector('#crypto-holding-error');
     if (!symbol) { errorHost.textContent = '請輸入正確的幣種代碼，例如 BTC、ETH 或 SOL。'; return; }
     if (!Number.isFinite(amount) || amount <= 0) { errorHost.textContent = '持有數量請輸入大於 0 的數字。'; return; }
+    if (!Number.isFinite(costPrice) || costPrice <= 0) { errorHost.textContent = '請輸入大於 0 的購買成本價。'; return; }
     if (holdings.some(holding => holding.symbol === symbol && holding.id !== editing?.id)) { errorHost.textContent = '這個幣種已在持幣清單中。'; return; }
     const holding = editing || { id: crypto.randomUUID(), name: '', price: 0, exchangeRate: 0, priceSource: '', quoteAt: '' };
     const symbolChanged = Boolean(holding.symbol && holding.symbol !== symbol);
     const savedHolding = !canRefreshQuotes && (!editing || symbolChanged) ? nearestSavedCryptoHolding(user, symbol, month) : null;
     holding.symbol = symbol;
     holding.amount = amount;
+    holding.costPrice = costPrice;
     if (!canRefreshQuotes && (!editing || symbolChanged)) {
       holding.name = savedHolding?.name || symbol;
       holding.price = Number(savedHolding?.price || 0);
@@ -2513,7 +2560,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=62').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=63').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

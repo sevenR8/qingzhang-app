@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <link rel="stylesheet" href="../styles.css?v=62" />
+    <style>
+      /* The test browser keeps a desktop viewport, so force the same layout
+         rules that the affected narrow iPhone screen uses. */
+      .modal-backdrop { align-items: end; }
+      .tw-form-grid { grid-template-columns: 1fr; gap: 0; }
+      .tw-holding-main { display: grid; }
+      .tw-holding-main > b { justify-self: start; }
+    </style>
+    <title>holding edit repro</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <output id="repro-result" hidden>RUNNING</output>
+    <script>
+      const currentMonth = '2026-08';
+      const fixture = {
+        periodStartDay: 5,
+        assets: { cash: 0, tw: 129965, us: 0, crypto: 0 },
+        expenses: [], incomes: {}, monthlyExpenses: [],
+        dailyLedgerSync: { summariesByMonth: {} }, cardPaymentByMonth: {},
+        cashMode: 'manual', cashManualTotal: 0, cashByMonth: {}, cashDataVersion: 1,
+        twHoldings: [], twStockMode: 'holdings', twManualTotal: 0,
+        twStockByMonth: {
+          [currentMonth]: {
+            mode: 'holdings', manualTotal: 0, holdingsCustomized: true, modeCustomized: true,
+            holdings: [
+              { id: 'tw-2330', symbol: '2330', name: '台積電', shares: 53, price: 2405, priceSource: 'fugle', quoteAt: new Date().toISOString(), isClose: true },
+              { id: 'tw-2603', symbol: '2603', name: '長榮', shares: 10, price: 250, priceSource: 'fugle', quoteAt: new Date().toISOString(), isClose: true }
+            ]
+          }
+        },
+        twStockDataVersion: 1,
+        usHoldings: [], usStockMode: 'manual', usManualTotal: 0, usStockByMonth: {}, usStockDataVersion: 1,
+        cryptoHoldings: [], cryptoMode: 'manual', cryptoManualTotal: 0, cryptoByMonth: {}, cryptoDataVersion: 1,
+        activeAssetMonth: currentMonth,
+        history: [{ month: currentMonth, assets: { cash: 0, tw: 129965, us: 0, crypto: 0 }, total: 129965 }],
+        createdAt: new Date().toISOString()
+      };
+      const row = { display_name: '測試', book: fixture, updated_at: new Date().toISOString() };
+      const query = {
+        select() { return this; }, eq() { return this; },
+        maybeSingle() { return Promise.resolve({ data: row, error: null }); },
+        upsert() { return Promise.resolve({ error: null }); }
+      };
+      window.supabase = { createClient: () => ({
+        auth: { getSession: async () => ({ data: { session: { user: { id: 'test-user', email: 'test@example.com', user_metadata: { display_name: '測試' } } } }, error: null }), signOut: async () => ({ error: null }) },
+        from: () => Object.create(query),
+        functions: { invoke: async () => ({ data: { quotes: [] }, error: null }) }
+      }) };
+
+      window.addEventListener('load', () => setTimeout(() => {
+        const result = document.querySelector('#repro-result');
+        const fail = message => { result.textContent = `FAIL: ${message}`; document.title = result.textContent; };
+        const asset = document.querySelector('[data-asset="tw"]');
+        if (!asset) return fail('台股卡片不存在');
+        asset.click();
+        const edit = document.querySelector('[data-edit-tw-holding="tw-2330"]');
+        if (!edit) return fail('修改按鈕不存在');
+        const rect = edit.getBoundingClientRect();
+        edit.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', pointerId: 1, isPrimary: true, button: 0, clientX: rect.left + 4, clientY: rect.top + 4 }));
+        edit.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', pointerId: 1, isPrimary: true, button: 0, clientX: rect.left + 4, clientY: rect.top + 4 }));
+        edit.click();
+        setTimeout(() => {
+          const form = document.querySelector('#tw-holding-form');
+          const heading = form?.querySelector('h3')?.textContent?.trim();
+          const symbolRect = form?.querySelector('#tw-symbol')?.getBoundingClientRect();
+          const sharesRect = form?.querySelector('#tw-shares')?.getBoundingClientRect();
+          const editableFieldsVisible = Boolean(symbolRect && sharesRect && symbolRect.top >= 0 && sharesRect.bottom <= window.innerHeight);
+          if (heading !== '修改持股') return fail(`仍是 ${heading || '無表單'}`);
+          if (!editableFieldsVisible) return fail(`可編輯欄位在畫面外 symbolTop=${Math.round(symbolRect?.top || 0)} sharesBottom=${Math.round(sharesRect?.bottom || 0)} viewport=${window.innerHeight}`);
+          result.textContent = 'PASS';
+          document.title = 'PASS';
+        }, 350);
+      }, 150));
+    </script>
+    <script src="../app.js?v=62-test"></script>
+  </body>
+</html>

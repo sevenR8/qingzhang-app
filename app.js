@@ -1320,6 +1320,15 @@ function reopenModalOnNextFrame(open) {
   }, 80);
 }
 
+function revealHoldingEditForm(editing, form) {
+  if (!editing || !form) return;
+  window.requestAnimationFrame(() => {
+    const modal = form.closest('.modal');
+    if (!modal || !form.isConnected) return;
+    modal.scrollTop = Math.max(0, form.offsetTop - 16);
+  });
+}
+
 function bindModalSwipeToClose(backdrop) {
   const modal = backdrop.querySelector('.modal');
   if (!modal) return;
@@ -1579,6 +1588,7 @@ function openTwStockModal(editId = null) {
   }));
   currentModal.querySelector('#cancel-tw-edit')?.addEventListener('click', () => openTwStockModal());
   const holdingForm = currentModal.querySelector('#tw-holding-form');
+  revealHoldingEditForm(editing, holdingForm);
   holdingForm.addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(holdingForm);
@@ -1802,6 +1812,7 @@ function openUsStockModal(editId = null) {
   }));
   currentModal.querySelector('#cancel-us-edit')?.addEventListener('click', () => openUsStockModal());
   const holdingForm = currentModal.querySelector('#us-holding-form');
+  revealHoldingEditForm(editing, holdingForm);
   holdingForm.addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(holdingForm);
@@ -2153,6 +2164,7 @@ function openCryptoModal(editId = null) {
   }));
   currentModal.querySelector('#cancel-crypto-edit')?.addEventListener('click', () => openCryptoModal());
   const holdingForm = currentModal.querySelector('#crypto-holding-form');
+  revealHoldingEditForm(editing, holdingForm);
   holdingForm.addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(holdingForm);
@@ -2501,7 +2513,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=61').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=62').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

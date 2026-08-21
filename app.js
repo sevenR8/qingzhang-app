@@ -958,11 +958,11 @@ function renderDashboard() {
           <section class="chart-card"><div class="chart-header"><div><h3>總資產變化</h3><span>${chartHistory.length > 1 ? `已追蹤 ${chartHistory.length} 個月份` : '同步本月資產後，會顯示走勢'}</span></div><span class="chart-caption">NT$ 100K / 格</span></div><div id="asset-chart" class="chart-wrap"></div></section>
         </section>
         <section>
-          <div class="section-heading"><div><h2>本月收入</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}${dailySummary ? ' · 快速每日記帳同步' : ''}</p></div><button class="text-button" id="edit-income-button">${dailySummary ? '手動備援' : '更新收入'}</button></div>
+          <div class="section-heading"><div><h2>本月收入</h2><p>${dailySummary ? `${monthText(viewMonth)} · 快速每日記帳同步` : `${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}`}</p></div><button class="text-button" id="edit-income-button">${dailySummary ? '手動備援' : '更新收入'}</button></div>
           <section class="income-card" id="income">${renderIncome(thisMonthIncome, thisMonthIncomeTotal)}</section>
-          <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月${dailySummary ? ' · 快速每日記帳同步' : ''}</p></div><button class="text-button" id="add-expense-button">${dailySummary ? '手動備援' : '＋ 新增'}</button></div>
+          <div class="section-heading"><div><h2>每月固定開銷</h2><p>${dailySummary ? `${monthText(viewMonth)} · 快速每日記帳同步` : `${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月`}</p></div><button class="text-button" id="add-expense-button">${dailySummary ? '手動備援' : '＋ 新增'}</button></div>
           <section class="expense-card" id="expenses">${dailySummary ? renderSyncedFixedExpense(fixedExpenses) : renderExpenses(viewedFixedExpenses)}</section>
-          <div class="section-heading"><div><h2>本月開銷</h2><p>${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}${dailySummary ? ' · 快速每日記帳同步' : ''}</p></div><button class="text-button" id="add-monthly-expense-button">${dailySummary ? '手動備援' : '＋ 記一筆'}</button></div>
+          <div class="section-heading"><div><h2>本月開銷</h2><p>${dailySummary ? `${monthText(viewMonth)} · 快速每日記帳同步` : `${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}`}</p></div><button class="text-button" id="add-monthly-expense-button">${dailySummary ? '手動備援' : '＋ 記一筆'}</button></div>
           <section class="expense-card" id="monthly-expenses">${dailySummary ? renderSyncedMonthlyExpenses(cashExpenses, cardExpenses) : renderMonthlyExpenses(thisMonthExpenses)}</section>
           <button class="card-payment-card" id="card-payment-button" type="button"><div><span>本月信用卡應繳</span><small>${dailySummary?.cardPaymentReady ? '快速每日記帳同步' : `${cardPaymentSettings.mode === 'manual' ? '自行填寫' : `沿用${monthText(previousMonth(viewMonth))}信用卡開銷`} · 手動備援`} · 點選設定</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></button>
           <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div></section>
@@ -981,7 +981,7 @@ function renderExpenses(expenses) {
 }
 
 function renderSyncedFixedExpense(total) {
-  return `<div class="expense-row synced-summary-row"><span class="expense-icon">↻</span><span><span class="expense-name">本期固定開銷</span><span class="expense-meta">快速每日記帳同步總和</span></span><strong class="expense-amount">$ ${money(total)}</strong></div>`;
+  return `<div class="expense-row synced-summary-row"><span class="expense-icon">↻</span><span class="expense-name">本期固定開銷</span><strong class="expense-amount">$ ${money(total)}</strong></div>`;
 }
 
 function renderIncome(income, total) {
@@ -996,7 +996,7 @@ function renderMonthlyExpenses(expenses) {
 }
 
 function renderSyncedMonthlyExpenses(cashTotal, cardTotal) {
-  return `<div class="expense-row synced-summary-row"><span class="expense-icon cash-icon">現</span><span><span class="expense-name">本期現金開銷</span><span class="expense-meta">快速每日記帳同步</span></span><strong class="expense-amount">$ ${money(cashTotal)}</strong></div><div class="expense-row synced-summary-row"><span class="expense-icon card-icon">▣</span><span><span class="expense-name">本期信用卡開銷</span><span class="expense-meta">快速每日記帳同步</span></span><strong class="expense-amount">$ ${money(cardTotal)}</strong></div><div class="monthly-expense-total"><span>本月消費總額</span><strong>NT$ ${money(Number(cashTotal || 0) + Number(cardTotal || 0))}</strong></div>`;
+  return `<div class="expense-row synced-summary-row"><span class="expense-icon cash-icon">現</span><span class="expense-name">本期現金開銷</span><strong class="expense-amount">$ ${money(cashTotal)}</strong></div><div class="expense-row synced-summary-row"><span class="expense-icon card-icon">▣</span><span class="expense-name">本期信用卡開銷</span><strong class="expense-amount">$ ${money(cardTotal)}</strong></div><div class="monthly-expense-total"><span>本月消費總額</span><strong>NT$ ${money(Number(cashTotal || 0) + Number(cardTotal || 0))}</strong></div>`;
 }
 
 function drawChart(history) {
@@ -2471,7 +2471,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=58').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=59').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

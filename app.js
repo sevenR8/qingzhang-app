@@ -1310,7 +1310,14 @@ function closeModal() {
 // Close first, then open on the next frame so the edit modal remains stable.
 function reopenModalOnNextFrame(open) {
   closeModal();
-  window.requestAnimationFrame(() => open());
+  window.setTimeout(() => {
+    try {
+      open();
+    } catch (error) {
+      console.error('Unable to reopen holding editor', error);
+      showToast('編輯卡片開啟失敗，請再試一次。');
+    }
+  }, 80);
 }
 
 function bindModalSwipeToClose(backdrop) {
@@ -1488,7 +1495,7 @@ function openTwStockModal(editId = null) {
   persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · ${twQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(holdingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name || '')}</strong><small>${money(holding.shares)} 股 × NT$ ${stockPrice(holding.price)} · ${twQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(holdingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-tw-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-tw-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入持股。<br>輸入股票代碼與股數後，系統會估算目前市值。</p>';
   const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-tw-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : `<span class="tw-snapshot-note">已凍結為 ${dateText(historicalAsOf)} 以前最近交易日的收盤價</span>`;
   const summaryContent = modeIsHoldings
@@ -1711,7 +1718,7 @@ function openUsStockModal(editId = null) {
   persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-us-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${stockPrice(holding.shares)} 股 × US$ ${stockPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${usQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(usHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-us-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-us-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入美股持股。<br>輸入股票代碼與股數後，系統會換算為台幣市值。</p>';
   const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-us-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : `<span class="tw-snapshot-note">已凍結為 ${dateText(historicalAsOf)} 以前最近交易日的收盤價與匯率</span>`;
   const summaryContent = modeIsHoldings
@@ -2062,7 +2069,7 @@ function openCryptoModal(editId = null) {
   persistUser(user);
   const rows = holdings.length ? holdings.map(holding => {
     const updatedAt = quoteTimeText(holding.quoteAt);
-    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${cryptoAmount(holding.amount)} 枚 × US$ ${cryptoPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${cryptoQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(cryptoHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button class="text-button" data-edit-crypto-holding="${holding.id}">修改</button><button class="text-button danger-text" data-delete-crypto-holding="${holding.id}">刪除</button></div></article>`;
+    return `<article class="tw-holding-row"><div class="tw-holding-main"><div><strong>${escapeHTML(holding.symbol)} ${escapeHTML(holding.name && holding.name !== holding.symbol ? holding.name : '')}</strong><small>${cryptoAmount(holding.amount)} 枚 × US$ ${cryptoPrice(holding.price)} × 匯率 ${stockPrice(holding.exchangeRate)} · ${cryptoQuoteSourceText(holding, canRefreshQuotes)}${updatedAt ? ` · ${updatedAt}` : ''}</small></div><b>NT$ ${money(cryptoHoldingMarketValue(holding))}</b></div><div class="tw-holding-actions"><button type="button" class="text-button" data-edit-crypto-holding="${holding.id}">修改</button><button type="button" class="text-button danger-text" data-delete-crypto-holding="${holding.id}">刪除</button></div></article>`;
   }).join('') : '<p class="tw-holding-empty">尚未加入加密貨幣。<br>輸入幣種代碼與持有數量後，系統會換算為台幣市值。</p>';
   const quoteToolbar = canRefreshQuotes ? `<button class="button light compact-button" id="refresh-crypto-quotes" type="button" ${holdings.length ? '' : 'disabled'}>更新價格</button>` : `<span class="tw-snapshot-note">已凍結為 ${dateText(historicalAsOf)} 的收盤價與最近匯率</span>`;
   const summaryContent = modeIsHoldings
@@ -2494,7 +2501,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=60').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=61').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

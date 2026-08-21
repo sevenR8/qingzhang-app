@@ -62,9 +62,13 @@
     const applicableRules = current
       ? activeRulesForPeriod(fixedRules, period.starts_on, period.ends_on)
       : [];
+    // Newer Daily Ledger records keep reusable rules, while older/current
+    // records may only contain the generated fixed entries. Prefer rules,
+    // but fall back to those entries so legacy data is never shown as zero.
+    const fixedEntriesTotal = sum(entries.filter(entry => entry.is_fixed));
     const fixedExpenseTotal = current
-      ? sum(applicableRules)
-      : sum(entries.filter(entry => entry.is_fixed));
+      ? (applicableRules.length ? sum(applicableRules) : fixedEntriesTotal)
+      : fixedEntriesTotal;
     const salaryAmount = amount(period.salary_amount);
     const otherIncomeTotal = sum(otherIncomeEntries);
     const cardPaymentReady = period.previous_card_bill_amount !== null
@@ -95,6 +99,22 @@
     return {
       start: `${startsOn}T00:00:00+08:00`,
       endExclusive: `${endExclusive.toISOString().slice(0, 10)}T00:00:00+08:00`,
+    };
+  }
+
+  async function fixedRulesQuery(supabase, ledgerId) {
+    const modern = await supabase.from('fixed_expense_rules')
+      .select('amount,payment_method,scheduled_day,recurrence_type,scheduled_month,active_from,retired_at')
+      .eq('ledger_id', ledgerId);
+    if (!modern.error) return modern;
+    // The scheduling migration is optional for older Daily Ledger databases.
+    const legacy = await supabase.from('fixed_expense_rules')
+      .select('amount,payment_method,scheduled_day,active_from,retired_at')
+      .eq('ledger_id', ledgerId);
+    if (legacy.error) return legacy;
+    return {
+      data: (legacy.data || []).map(rule => ({ ...rule, recurrence_type: 'monthly', scheduled_month: null })),
+      error: null,
     };
   }
 
@@ -140,11 +160,7 @@
       .gte('received_at', bounds.start)
       .lt('received_at', bounds.endExclusive);
     const rulesQuery = isCurrent
-      ? supabase.from('fixed_expense_rules')
-        .select('amount,payment_method,scheduled_day,recurrence_type,scheduled_month,active_from,retired_at')
-        .eq('ledger_id', ledgerId)
-        .lte('active_from', period.ends_on)
-        .or(`retired_at.is.null,retired_at.gte.${period.starts_on}`)
+      ? fixedRulesQuery(supabase, ledgerId)
       : Promise.resolve({ data: [], error: null });
     const [entriesResult, incomeResult, repaymentsResult, rulesResult] = await Promise.all([
       entriesQuery, incomeQuery, repaymentsQuery, rulesQuery,

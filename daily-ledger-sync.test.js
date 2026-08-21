@@ -41,6 +41,20 @@ assert.equal(current.cashExpenseTotal, 6000);
 assert.equal(current.creditCardExpenseTotal, 6000);
 assert.equal(current.cardPaymentDue, 6300);
 
+const currentLegacyFixed = sync.summarize({
+  current: true,
+  period: {
+    starts_on: '2026-08-05',
+    ends_on: '2026-09-04',
+    salary_amount: 0,
+    previous_card_bill_amount: 0,
+    previous_card_bill_zero_confirmed: true,
+  },
+  entries: [{ amount: 8420, payment_method: 'cash', is_fixed: true }],
+  fixedRules: [],
+});
+assert.equal(currentLegacyFixed.fixedExpenseTotal, 8420);
+
 const historical = sync.summarize({
   current: false,
   period: {

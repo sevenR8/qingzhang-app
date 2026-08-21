@@ -1305,6 +1305,14 @@ function closeModal() {
   window.setTimeout(() => refreshCloudBookWhenVisible(), 0);
 }
 
+// On mobile Safari, replacing a modal during the same tap event can remove
+// the newly-created backdrop when the original pointer/click sequence ends.
+// Close first, then open on the next frame so the edit modal remains stable.
+function reopenModalOnNextFrame(open) {
+  closeModal();
+  window.requestAnimationFrame(() => open());
+}
+
 function bindModalSwipeToClose(backdrop) {
   const modal = backdrop.querySelector('.modal');
   if (!modal) return;
@@ -1545,7 +1553,12 @@ function openTwStockModal(editId = null) {
     openTwStockModal();
     showToast(event.target.checked ? '已使用持股估值更新台股總額' : '已切回手動台股總額');
   });
-  currentModal.querySelectorAll('[data-edit-tw-holding]').forEach(button => button.addEventListener('click', () => openTwStockModal(button.dataset.editTwHolding)));
+  currentModal.querySelectorAll('[data-edit-tw-holding]').forEach(button => button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const holdingId = button.dataset.editTwHolding;
+    reopenModalOnNextFrame(() => openTwStockModal(holdingId));
+  }));
   currentModal.querySelectorAll('[data-delete-tw-holding]').forEach(button => button.addEventListener('click', () => {
     const user = getUser();
     const state = twStockState(user, month);
@@ -1763,7 +1776,12 @@ function openUsStockModal(editId = null) {
     openUsStockModal();
     showToast(event.target.checked ? '已使用持股估值更新美股總額' : '已切回手動美股總額');
   });
-  currentModal.querySelectorAll('[data-edit-us-holding]').forEach(button => button.addEventListener('click', () => openUsStockModal(button.dataset.editUsHolding)));
+  currentModal.querySelectorAll('[data-edit-us-holding]').forEach(button => button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const holdingId = button.dataset.editUsHolding;
+    reopenModalOnNextFrame(() => openUsStockModal(holdingId));
+  }));
   currentModal.querySelectorAll('[data-delete-us-holding]').forEach(button => button.addEventListener('click', () => {
     const user = getUser();
     const state = usStockState(user, month);
@@ -2109,7 +2127,12 @@ function openCryptoModal(editId = null) {
     openCryptoModal();
     showToast(event.target.checked ? '已使用持幣估值更新加密貨幣總額' : '已切回手動加密貨幣總額');
   });
-  currentModal.querySelectorAll('[data-edit-crypto-holding]').forEach(button => button.addEventListener('click', () => openCryptoModal(button.dataset.editCryptoHolding)));
+  currentModal.querySelectorAll('[data-edit-crypto-holding]').forEach(button => button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const holdingId = button.dataset.editCryptoHolding;
+    reopenModalOnNextFrame(() => openCryptoModal(holdingId));
+  }));
   currentModal.querySelectorAll('[data-delete-crypto-holding]').forEach(button => button.addEventListener('click', () => {
     const user = getUser();
     const state = cryptoState(user, month);
@@ -2471,7 +2494,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=59').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=60').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

@@ -39,9 +39,13 @@ let marketQuoteStartupTimer;
 let marketQuoteRefreshInFlight = false;
 let lastMarketQuoteRefreshAt = 0;
 let marketQuoteRefreshGeneration = 0;
+let dailyLedgerRefreshTimer;
+let dailyLedgerRefreshInFlight = null;
+let lastDailyLedgerRefreshAt = 0;
 let mobileRefreshInFlight = null;
 let monthPageDirection = 0;
 const MARKET_QUOTE_REFRESH_MS = 5 * 60 * 1000;
+const DAILY_LEDGER_REFRESH_MS = 5 * 60 * 1000;
 
 function getLegacyUsers() {
   try { return JSON.parse(localStorage.getItem(STORAGE.legacyUsers) || '{}'); }
@@ -58,6 +62,8 @@ function normalizeUser(user) {
   user.periodStartDay = normalizePeriodStartDay(user.periodStartDay);
   user.incomes ||= {};
   user.monthlyExpenses ||= [];
+  if (!user.dailyLedgerSync || typeof user.dailyLedgerSync !== 'object' || Array.isArray(user.dailyLedgerSync)) user.dailyLedgerSync = {};
+  if (!user.dailyLedgerSync.summariesByMonth || typeof user.dailyLedgerSync.summariesByMonth !== 'object' || Array.isArray(user.dailyLedgerSync.summariesByMonth)) user.dailyLedgerSync.summariesByMonth = {};
   if (!user.cardPaymentByMonth || typeof user.cardPaymentByMonth !== 'object' || Array.isArray(user.cardPaymentByMonth)) user.cardPaymentByMonth = {};
   Object.entries(user.cardPaymentByMonth).forEach(([month, state]) => {
     user.cardPaymentByMonth[month] = normalizeCreditCardPaymentState(state);
@@ -547,11 +553,28 @@ function orderedFixedExpenses(expenses) {
   });
 }
 function grossAssets(user, month = viewMonth) { return Object.values(assetsForMonth(user, month)).reduce((total, amount) => total + Number(amount || 0), 0); }
-function incomeForMonth(user, month = todayMonth(user)) { return { salary: 0, other: 0, otherNote: '', ...(user.incomes[month] || {}) }; }
+function dailyLedgerSummaryForMonth(user, month = viewMonth) {
+  const summary = user.dailyLedgerSync?.summariesByMonth?.[month];
+  return summary?.status === 'ready' && summary.available ? summary : null;
+}
+function incomeForMonth(user, month = todayMonth(user)) {
+  const manual = { salary: 0, other: 0, otherNote: '', ...(user.incomes[month] || {}) };
+  const synced = dailyLedgerSummaryForMonth(user, month);
+  return synced ? { salary: Number(synced.salaryAmount || 0), other: Number(synced.otherIncomeTotal || 0), otherNote: '', synced: true } : manual;
+}
 function expensesForMonth(user, month = todayMonth(user)) { return user.monthlyExpenses.filter(item => item.date && periodMonthForDate(item.date, periodStartDay(user)) === month); }
-function fixedExpenseTotal(user, month = viewMonth) { return fixedExpensesForMonth(user, month).reduce((sum, item) => sum + Number(item.amount || 0), 0); }
-function cashExpenseTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'cash').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
-function creditCardSpendTotal(user, month = viewMonth) { return expensesForMonth(user, month).filter(item => item.payment === 'card').reduce((sum, item) => sum + Number(item.amount || 0), 0); }
+function fixedExpenseTotal(user, month = viewMonth) {
+  const synced = dailyLedgerSummaryForMonth(user, month);
+  return synced ? Number(synced.fixedExpenseTotal || 0) : fixedExpensesForMonth(user, month).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
+function cashExpenseTotal(user, month = viewMonth) {
+  const synced = dailyLedgerSummaryForMonth(user, month);
+  return synced ? Number(synced.cashExpenseTotal || 0) : expensesForMonth(user, month).filter(item => item.payment === 'cash').reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
+function creditCardSpendTotal(user, month = viewMonth) {
+  const synced = dailyLedgerSummaryForMonth(user, month);
+  return synced ? Number(synced.creditCardExpenseTotal || 0) : expensesForMonth(user, month).filter(item => item.payment === 'card').reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
 function normalizeCreditCardPaymentState(state, fallbackManualTotal = 0) {
   const normalized = state && typeof state === 'object' ? state : {};
   normalized.mode = normalized.mode === 'manual' ? 'manual' : 'previous';
@@ -570,6 +593,8 @@ function creditCardPaymentState(user, month = viewMonth, { create = true } = {})
   return state;
 }
 function creditCardPaymentDue(user, month = viewMonth) {
+  const synced = dailyLedgerSummaryForMonth(user, month);
+  if (synced?.cardPaymentReady) return Number(synced.cardPaymentDue || 0);
   const state = creditCardPaymentState(user, month);
   return state?.mode === 'manual' ? Number(state.manualTotal || 0) : creditCardSpendTotal(user, previousMonth(month));
 }
@@ -629,6 +654,7 @@ function defaultUser(name, email) {
     expenses: [],
     incomes: {},
     monthlyExpenses: [],
+    dailyLedgerSync: { summariesByMonth: {} },
     cardPaymentByMonth: {},
     cashMode: 'manual',
     cashManualTotal: 0,
@@ -684,6 +710,7 @@ function bookPayload(user) {
     expenses: user.expenses,
     incomes: user.incomes,
     monthlyExpenses: user.monthlyExpenses,
+    dailyLedgerSync: user.dailyLedgerSync,
     cardPaymentByMonth: user.cardPaymentByMonth,
     cashMode: user.cashMode,
     cashManualTotal: user.cashManualTotal,
@@ -766,6 +793,7 @@ async function loadCloudBook(authUser) {
       viewMonth = todayMonth(activeUser);
       renderDashboard();
       startMarketQuoteUpdates();
+      startDailyLedgerUpdates();
       showToast('目前離線，顯示此裝置的暫存資料。');
       return;
     }
@@ -779,6 +807,7 @@ async function loadCloudBook(authUser) {
   if (!data) await syncBookToCloud({ quiet: true });
   renderDashboard();
   startMarketQuoteUpdates();
+  startDailyLedgerUpdates();
 }
 
 function refreshCloudBookWhenVisible({ force = false, render = true, notify = true } = {}) {
@@ -823,6 +852,7 @@ function showToast(message) {
 
 function renderAuth(mode = 'login') {
   stopMarketQuoteUpdates();
+  stopDailyLedgerUpdates();
   app.innerHTML = `
     <main class="auth-screen">
       <div class="auth-shell">
@@ -886,6 +916,7 @@ function renderDashboard() {
   const user = getUser();
   if (!user) { renderAuth(); return; }
   refreshAllSnapshotTotals(user);
+  const dailySummary = dailyLedgerSummaryForMonth(user, viewMonth);
   const total = totalAssets(user, viewMonth);
   const fixedExpenses = fixedExpenseTotal(user, viewMonth);
   const viewedAssets = assetsForMonth(user, viewMonth);
@@ -927,13 +958,13 @@ function renderDashboard() {
           <section class="chart-card"><div class="chart-header"><div><h3>總資產變化</h3><span>${chartHistory.length > 1 ? `已追蹤 ${chartHistory.length} 個月份` : '同步本月資產後，會顯示走勢'}</span></div><span class="chart-caption">NT$ 100K / 格</span></div><div id="asset-chart" class="chart-wrap"></div></section>
         </section>
         <section>
-          <div class="section-heading"><div><h2>本月收入</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}</p></div><button class="text-button" id="edit-income-button">更新收入</button></div>
+          <div class="section-heading"><div><h2>本月收入</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(thisMonthIncomeTotal)}${dailySummary ? ' · 快速每日記帳同步' : ''}</p></div><button class="text-button" id="edit-income-button">${dailySummary ? '手動備援' : '更新收入'}</button></div>
           <section class="income-card" id="income">${renderIncome(thisMonthIncome, thisMonthIncomeTotal)}</section>
-          <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月</p></div><button class="text-button" id="add-expense-button">＋ 新增</button></div>
-          <section class="expense-card" id="expenses">${renderExpenses(viewedFixedExpenses)}</section>
-          <div class="section-heading"><div><h2>本月開銷</h2><p>${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}</p></div><button class="text-button" id="add-monthly-expense-button">＋ 記一筆</button></div>
-          <section class="expense-card" id="monthly-expenses">${renderMonthlyExpenses(thisMonthExpenses)}</section>
-          <button class="card-payment-card" id="card-payment-button" type="button"><div><span>本月信用卡應繳</span><small>${cardPaymentSettings.mode === 'manual' ? '自行填寫' : `沿用${monthText(previousMonth(viewMonth))}信用卡開銷`} · 點選設定</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></button>
+          <div class="section-heading"><div><h2>每月固定開銷</h2><p>${monthText(viewMonth)} · 合計 NT$ ${money(fixedExpenses)} / 月${dailySummary ? ' · 快速每日記帳同步' : ''}</p></div><button class="text-button" id="add-expense-button">${dailySummary ? '手動備援' : '＋ 新增'}</button></div>
+          <section class="expense-card" id="expenses">${dailySummary ? renderSyncedFixedExpense(fixedExpenses) : renderExpenses(viewedFixedExpenses)}</section>
+          <div class="section-heading"><div><h2>本月開銷</h2><p>${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}${dailySummary ? ' · 快速每日記帳同步' : ''}</p></div><button class="text-button" id="add-monthly-expense-button">${dailySummary ? '手動備援' : '＋ 記一筆'}</button></div>
+          <section class="expense-card" id="monthly-expenses">${dailySummary ? renderSyncedMonthlyExpenses(cashExpenses, cardExpenses) : renderMonthlyExpenses(thisMonthExpenses)}</section>
+          <button class="card-payment-card" id="card-payment-button" type="button"><div><span>本月信用卡應繳</span><small>${dailySummary?.cardPaymentReady ? '快速每日記帳同步' : `${cardPaymentSettings.mode === 'manual' ? '自行填寫' : `沿用${monthText(previousMonth(viewMonth))}信用卡開銷`} · 手動備援`} · 點選設定</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></button>
           <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div></section>
         </section>
       </div>
@@ -949,6 +980,10 @@ function renderExpenses(expenses) {
   return orderedFixedExpenses(expenses).map((expense, index) => `<button class="expense-row fixed-expense-row" data-expense="${expense.id}" title="拖曳左側圖示排序；點選其餘區域可編輯 ${escapeHTML(expense.name)}"><span class="drag-handle" aria-hidden="true">⠿</span><span class="expense-icon">${expenseIcons[index % expenseIcons.length]}</span><span><span class="expense-name">${escapeHTML(expense.name)}</span><span class="expense-meta">每月 ${expense.day} 日${expense.category ? ` · ${escapeHTML(expense.category)}` : ''}</span></span><strong class="expense-amount">$ ${money(expense.amount)}</strong></button>`).join('');
 }
 
+function renderSyncedFixedExpense(total) {
+  return `<div class="expense-row synced-summary-row"><span class="expense-icon">↻</span><span><span class="expense-name">本期固定開銷</span><span class="expense-meta">快速每日記帳同步總和</span></span><strong class="expense-amount">$ ${money(total)}</strong></div>`;
+}
+
 function renderIncome(income, total) {
   return `<div class="income-total"><span>本月收入合計</span><strong>$ ${money(total)}</strong></div><div class="income-breakdown"><div class="income-item salary"><span class="income-symbol">＋</span><span><small>薪資收入</small><strong>$ ${money(income.salary)}</strong></span></div><div class="income-item other"><span class="income-symbol">＋</span><span><small>其他收入</small><strong>$ ${money(income.other)}</strong>${income.otherNote ? `<em class="income-note">${escapeHTML(income.otherNote)}</em>` : ''}</span></div></div>`;
 }
@@ -958,6 +993,10 @@ function renderMonthlyExpenses(expenses) {
   const total = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const rows = expenses.slice().sort((a, b) => b.date.localeCompare(a.date)).map(expense => { const label = expense.payment === 'card' ? '信用卡消費' : '現金開銷'; return `<button class="expense-row monthly-row" data-monthly-expense="${expense.id}" title="編輯${label}"><span class="expense-icon ${expense.payment === 'card' ? 'card-icon' : 'cash-icon'}">${expense.payment === 'card' ? '▣' : '⌁'}</span><span><span class="expense-name">${label}</span><span class="expense-meta">${dateText(expense.date)} <span class="payment-chip ${expense.payment}">${expense.payment === 'card' ? '下月繳' : '已支出'}</span></span></span><strong class="expense-amount">$ ${money(expense.amount)}</strong></button>`; }).join('');
   return `${rows}<div class="monthly-expense-total"><span>本月消費總額</span><strong>NT$ ${money(total)}</strong></div>`;
+}
+
+function renderSyncedMonthlyExpenses(cashTotal, cardTotal) {
+  return `<div class="expense-row synced-summary-row"><span class="expense-icon cash-icon">現</span><span><span class="expense-name">本期現金開銷</span><span class="expense-meta">快速每日記帳同步</span></span><strong class="expense-amount">$ ${money(cashTotal)}</strong></div><div class="expense-row synced-summary-row"><span class="expense-icon card-icon">▣</span><span><span class="expense-name">本期信用卡開銷</span><span class="expense-meta">快速每日記帳同步</span></span><strong class="expense-amount">$ ${money(cardTotal)}</strong></div><div class="monthly-expense-total"><span>本月消費總額</span><strong>NT$ ${money(Number(cashTotal || 0) + Number(cardTotal || 0))}</strong></div>`;
 }
 
 function drawChart(history) {
@@ -1089,7 +1128,10 @@ function bindMobilePullToRefresh() {
     let refreshFailed = false;
     mobileRefreshInFlight = (async () => {
       await refreshCloudBookWhenVisible({ force: true, render: false, notify: false });
-      await runMarketQuoteRefresh({ renderUi: false });
+      await Promise.all([
+        runMarketQuoteRefresh({ renderUi: false }),
+        refreshDailyLedgerSummary({ month: viewMonth, force: true, render: false })
+      ]);
     })();
     try {
       await mobileRefreshInFlight;
@@ -1171,6 +1213,7 @@ function selectViewMonth(month, { direction = 0 } = {}) {
     persistUser(user);
   }
   renderDashboard();
+  refreshDailyLedgerSummary({ month, force: true });
 }
 
 function moveFixedExpense(movedId, targetId, placeAfter) {
@@ -1927,6 +1970,65 @@ function startMarketQuoteUpdates() {
   marketQuoteRefreshTimer = window.setInterval(() => runMarketQuoteRefresh(), MARKET_QUOTE_REFRESH_MS);
 }
 
+async function refreshDailyLedgerSummary({ month = viewMonth, force = false, render = true } = {}) {
+  if (!activeUser?.id || !supabaseClient || !window.QingZhangDailyLedgerSync) return false;
+  if (document.visibilityState === 'hidden' || (currentModal && !force)) return false;
+  if (dailyLedgerRefreshInFlight) return dailyLedgerRefreshInFlight;
+  if (!force && month === viewMonth && Date.now() - lastDailyLedgerRefreshAt < DAILY_LEDGER_REFRESH_MS) return false;
+  const refreshUserId = activeUser.id;
+  dailyLedgerRefreshInFlight = (async () => {
+    let result;
+    try {
+      result = await window.QingZhangDailyLedgerSync.fetchSummary({
+        supabase: supabaseClient,
+        userId: refreshUserId,
+        month,
+        startDay: periodStartDay(activeUser),
+      });
+    } catch (error) {
+      console.error('Daily Ledger sync failed', error);
+      result = { available: false, reason: 'request-failed' };
+    }
+    if (activeUser?.id !== refreshUserId) return false;
+    const user = getUser();
+    user.dailyLedgerSync ||= { summariesByMonth: {} };
+    user.dailyLedgerSync.summariesByMonth ||= {};
+    const previous = user.dailyLedgerSync.summariesByMonth[month];
+    if (result.available) {
+      user.dailyLedgerSync.summariesByMonth[month] = { ...result, status: 'ready' };
+      user.dailyLedgerSync.ledgerId = result.ledgerId;
+      user.dailyLedgerSync.lastSuccessAt = result.syncedAt;
+    } else {
+      user.dailyLedgerSync.summariesByMonth[month] = {
+        status: 'unavailable',
+        available: false,
+        reason: result.reason || 'request-failed',
+        failedAt: new Date().toISOString(),
+      };
+    }
+    const changed = JSON.stringify(previous || null) !== JSON.stringify(user.dailyLedgerSync.summariesByMonth[month]);
+    lastDailyLedgerRefreshAt = Date.now();
+    if (changed) await persistUser(user, { quiet: true });
+    else cacheBook(user);
+    if (render && month === viewMonth) renderDashboard();
+    return result.available;
+  })().finally(() => { dailyLedgerRefreshInFlight = null; });
+  return dailyLedgerRefreshInFlight;
+}
+
+function stopDailyLedgerUpdates() {
+  window.clearInterval(dailyLedgerRefreshTimer);
+  dailyLedgerRefreshTimer = undefined;
+  dailyLedgerRefreshInFlight = null;
+  lastDailyLedgerRefreshAt = 0;
+}
+
+function startDailyLedgerUpdates() {
+  stopDailyLedgerUpdates();
+  window.setTimeout(() => refreshDailyLedgerSummary({ month: todayMonth(), force: true }), 0);
+  dailyLedgerRefreshTimer = window.setInterval(() => refreshDailyLedgerSummary({ month: todayMonth() }), DAILY_LEDGER_REFRESH_MS);
+}
+
 function openCryptoModal(editId = null) {
   const user = getUser();
   const month = viewMonth;
@@ -2181,14 +2283,17 @@ function openCardPaymentModal() {
   const previous = previousMonth(month);
   const previousSpend = creditCardSpendTotal(user, previous);
   const paymentDue = creditCardPaymentDue(user, month);
-  const summaryContent = state.mode === 'manual'
+  const dailySummary = dailyLedgerSummaryForMonth(user, month);
+  const summaryContent = dailySummary?.cardPaymentReady
+    ? `<span>快速每日記帳同步</span><strong>NT$ ${money(paymentDue)}</strong><small>已使用該帳務週期記錄的實際信用卡應繳金額；下方設定保留為同步失敗時的手動備援。</small>`
+    : state.mode === 'manual'
     ? `<form id="card-payment-manual-form" class="tw-manual-total-form"><label for="card-payment-manual-total">自行填寫應繳金額（TWD）</label><div class="tw-manual-total-input"><span>NT$</span><input id="card-payment-manual-total" name="manualTotal" type="text" value="${inputAmount(state.manualTotal)}" placeholder="例如：10722+500" required inputmode="text"><button class="button light compact-button" type="submit">儲存</button></div><small id="card-payment-manual-preview">目前信用卡應繳 NT$ ${money(paymentDue)}</small><div class="form-error" id="card-payment-manual-error"></div></form>`
     : `<span>沿用上個月信用卡開銷</span><strong>NT$ ${money(paymentDue)}</strong><small>${monthText(previous)}信用卡開銷 NT$ ${money(previousSpend)}，自動列為${monthText(month)}應繳金額</small>`;
   const modes = [
     { value: 'manual', title: '自行填寫', description: '自行輸入這個月份實際要繳的信用卡金額。' },
     { value: 'previous', title: '沿用上個月信用卡開銷', description: `自動使用${monthText(previous)}記錄的信用卡開銷 NT$ ${money(previousSpend)}。` }
   ];
-  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}信用卡</span><h2>本月信用卡應繳</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary card-payment-summary">${summaryContent}</section><div class="cash-mode-list" role="radiogroup" aria-label="信用卡應繳計算方式">${modes.map(mode => `<label class="tw-auto-switch cash-mode-option"><input type="radio" name="card-payment-mode" value="${mode.value}" ${state.mode === mode.value ? 'checked' : ''}><span><b>${mode.title}</b><small>${mode.description}</small></span></label>`).join('')}</div><p class="form-note tw-disclaimer">這項設定只影響${monthText(month)}，並會同步更新本月總開銷、收支結餘、現金與總資產。</p>`);
+  openModal(`<header class="modal-header"><div><span class="eyebrow">${monthText(month)}信用卡</span><h2>本月信用卡應繳</h2></div><button class="icon-button" data-close-modal aria-label="關閉">×</button></header><section class="tw-stock-summary card-payment-summary">${summaryContent}</section><div class="cash-mode-list" role="radiogroup" aria-label="信用卡應繳計算方式">${modes.map(mode => `<label class="tw-auto-switch cash-mode-option"><input type="radio" name="card-payment-mode" value="${mode.value}" ${state.mode === mode.value ? 'checked' : ''}><span><b>${mode.title}</b><small>${mode.description}</small></span></label>`).join('')}</div><p class="form-note tw-disclaimer">${dailySummary?.cardPaymentReady ? '快速每日記帳有可用資料時會優先顯示；這裡的設定會保留為無法同步時的備援。' : `這項設定只影響${monthText(month)}，並會同步更新本月總開銷、收支結餘、現金與總資產。`}</p>`);
   const manualForm = currentModal.querySelector('#card-payment-manual-form');
   if (manualForm) {
     const input = manualForm.querySelector('#card-payment-manual-total');
@@ -2354,6 +2459,7 @@ function openAccountModal() {
   });
   currentModal.querySelector('#confirm-logout').addEventListener('click', async () => {
     stopMarketQuoteUpdates();
+    stopDailyLedgerUpdates();
     await cloudSyncQueue.catch(() => false);
     await syncBookToCloud({ quiet: true });
     await supabaseClient?.auth.signOut();
@@ -2365,17 +2471,24 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=56').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=57').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible' || !activeUser) return;
   await refreshCloudBookWhenVisible({ force: true });
   if (Date.now() - lastMarketQuoteRefreshAt >= MARKET_QUOTE_REFRESH_MS) runMarketQuoteRefresh();
+  if (Date.now() - lastDailyLedgerRefreshAt >= DAILY_LEDGER_REFRESH_MS) refreshDailyLedgerSummary({ month: todayMonth(), force: true });
 });
 
-window.addEventListener('focus', () => refreshCloudBookWhenVisible());
-window.addEventListener('pageshow', () => refreshCloudBookWhenVisible());
+window.addEventListener('focus', () => {
+  refreshCloudBookWhenVisible();
+  refreshDailyLedgerSummary({ month: todayMonth() });
+});
+window.addEventListener('pageshow', () => {
+  refreshCloudBookWhenVisible();
+  refreshDailyLedgerSummary({ month: todayMonth() });
+});
 
 async function startApp() {
   if (!supabaseClient) { renderCloudSetupError('無法載入雲端服務。請重新整理後再試。'); return; }

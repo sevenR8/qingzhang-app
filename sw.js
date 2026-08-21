@@ -1,5 +1,5 @@
-const CACHE_NAME = 'qingzhang-v56';
-const APP_FILES = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './assets/icon.svg'];
+const CACHE_NAME = 'qingzhang-v57';
+const APP_FILES = ['./', './index.html', './styles.css', './daily-ledger-sync.js', './app.js', './manifest.webmanifest', './assets/icon.svg'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_FILES)));

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qingzhang-v57';
+const CACHE_NAME = 'qingzhang-v58';
 const APP_FILES = ['./', './index.html', './styles.css', './daily-ledger-sync.js', './app.js', './manifest.webmanifest', './assets/icon.svg'];
 
 self.addEventListener('install', event => {

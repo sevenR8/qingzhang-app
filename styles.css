@@ -91,8 +91,9 @@ input:focus, select:focus { border-color: #76a59a; box-shadow: 0 0 0 3px rgba(77
 .cash .asset-icon { background: #f2f8bf; }.tw .asset-icon { background: #fff2d2; }.us .asset-icon { background: #edeaff; }.crypto .asset-icon { background: #ffe3da; }
 .asset-card small { color: var(--muted); display: block; font-size: 12px; }
 .asset-card strong { font-family: 'DM Mono', monospace; margin-top: 5px; font-size: 16px; display: block; letter-spacing: -.04em; }
-.asset-card .asset-profit { display: block; margin-top: 4px; font: 500 11px 'DM Mono', monospace; white-space: nowrap; }
-.asset-card .asset-profit.positive { color: #d3483d; }.asset-card .asset-profit.negative { color: #3b7d6d; }
+.asset-card .asset-profit { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; padding: 2px 5px; border-radius: 5px; font: 500 11px 'DM Mono', monospace; letter-spacing: -.045em; white-space: nowrap; }
+.asset-card .asset-profit.positive { color: #bd493f; background: #fff0ed; }.asset-card .asset-profit.negative { color: #3b7d6d; background: #eaf5ed; }
+.asset-card .asset-profit-percent { letter-spacing: -.07em; }
 .asset-card .edit-hint { color: #789088; font-size: 9px; margin-top: auto; padding-top: 8px; }
 
 .chart-card, .expense-card, .income-card { background: var(--card); border-radius: 21px; border: 1px solid var(--line); box-shadow: 0 3px 12px rgba(33,55,50,.03); }

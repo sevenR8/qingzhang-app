@@ -168,7 +168,7 @@ function assetCardProfitMarkup(metrics) {
   const className = metrics.totalProfit >= 0 ? 'positive' : 'negative';
   const sign = metrics.totalProfit >= 0 ? '+' : '−';
   const percentSign = metrics.totalPercent >= 0 ? '+' : '−';
-  return `<span class="asset-profit ${className}">${sign}NT$ ${money(Math.abs(metrics.totalProfit))}（${percentSign}${Math.abs(metrics.totalPercent).toFixed(2)}%）</span>`;
+  return `<span class="asset-profit ${className}"><span class="asset-profit-amount">${sign}NT$ ${money(Math.abs(metrics.totalProfit))}</span><span class="asset-profit-percent">（${percentSign}${Math.abs(metrics.totalPercent).toFixed(2)}%）</span></span>`;
 }
 function cloneTwHoldings(holdings) { return Array.isArray(holdings) ? holdings.map(holding => ({ ...holding })) : []; }
 function normalizeTwStockState(state, fallbackManualTotal = 0) {
@@ -2582,7 +2582,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=64').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=65').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

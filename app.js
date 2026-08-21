@@ -146,7 +146,7 @@ function holdingSummaryMarkup(metrics) {
   const profitClass = metrics.totalProfit === null ? '' : metrics.totalProfit >= 0 ? 'positive' : 'negative';
   const profit = metrics.totalProfit === null ? '—' : `${metrics.totalProfit >= 0 ? '+' : '−'}NT$ ${money(Math.abs(metrics.totalProfit))}`;
   const percent = metrics.totalPercent === null ? '請先填妥每筆成本' : `（${metrics.totalPercent >= 0 ? '+' : '−'}${Math.abs(metrics.totalPercent).toFixed(2)}%）`;
-  return `<div class="holding-summary-metrics"><div><span>總現值（TWD）</span><strong>NT$ ${money(metrics.totalValue)}</strong></div><div><span>總成本</span><strong>${metrics.totalCost === null ? '—' : `NT$ ${money(metrics.totalCost)}`}</strong></div><div class="holding-summary-profit ${profitClass}"><span>總損益</span><strong>${profit}</strong><small>${percent}</small></div></div>`;
+  return `<div class="holding-summary-metrics"><div><span>總現值（TWD）</span><strong>NT$ ${money(metrics.totalValue)}</strong></div><div><span>總成本</span><strong>${metrics.totalCost === null ? '—' : `NT$ ${money(metrics.totalCost)}`}</strong></div><div class="holding-summary-profit ${profitClass}"><span>總損益</span><div class="holding-summary-profit-value"><small>${percent}</small><strong>${profit}</strong></div></div></div>`;
 }
 function assetCardProfit(user, key, month) {
   if (key === 'tw') {

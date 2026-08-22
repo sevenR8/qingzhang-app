@@ -2589,7 +2589,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=66').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=67').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

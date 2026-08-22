@@ -65,10 +65,12 @@
     // Newer Daily Ledger records keep reusable rules, while older/current
     // records may only contain the generated fixed entries. Prefer rules,
     // but fall back to those entries so legacy data is never shown as zero.
-    const fixedEntriesTotal = sum(entries.filter(entry => entry.is_fixed));
-    const fixedExpenseTotal = current
-      ? (applicableRules.length ? sum(applicableRules) : fixedEntriesTotal)
-      : fixedEntriesTotal;
+    const fixedEntries = current
+      ? (applicableRules.length ? applicableRules : entries.filter(entry => entry.is_fixed))
+      : entries.filter(entry => entry.is_fixed);
+    const fixedExpenseTotal = sum(fixedEntries);
+    const fixedCreditCardExpenseTotal = sum(fixedEntries.filter(entry => entry.payment_method === 'credit_card'));
+    const fixedCashExpenseTotal = fixedExpenseTotal - fixedCreditCardExpenseTotal;
     const salaryAmount = amount(period.salary_amount);
     const otherIncomeTotal = sum(otherIncomeEntries);
     const cardPaymentReady = period.previous_card_bill_amount !== null
@@ -81,6 +83,8 @@
       otherIncomeTotal,
       incomeTotal: salaryAmount + otherIncomeTotal,
       fixedExpenseTotal,
+      fixedCashExpenseTotal,
+      fixedCreditCardExpenseTotal,
       cashExpenseTotal: Math.max(0, cashSpent - advanceRepaymentTotal),
       creditCardExpenseTotal,
       cardPaymentReady,

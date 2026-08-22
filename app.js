@@ -621,6 +621,11 @@ function fixedExpenseTotal(user, month = viewMonth) {
   const synced = dailyLedgerSummaryForMonth(user, month);
   return synced ? Number(synced.fixedExpenseTotal || 0) : fixedExpensesForMonth(user, month).reduce((sum, item) => sum + Number(item.amount || 0), 0);
 }
+function fixedCashExpenseTotal(user, month = viewMonth) {
+  const synced = dailyLedgerSummaryForMonth(user, month);
+  if (synced) return Number(synced.fixedCashExpenseTotal ?? synced.fixedExpenseTotal ?? 0);
+  return fixedExpensesForMonth(user, month).filter(item => item.payment !== 'card').reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
 function cashExpenseTotal(user, month = viewMonth) {
   const synced = dailyLedgerSummaryForMonth(user, month);
   return synced ? Number(synced.cashExpenseTotal || 0) : expensesForMonth(user, month).filter(item => item.payment === 'cash').reduce((sum, item) => sum + Number(item.amount || 0), 0);
@@ -657,7 +662,7 @@ function incomeTotalForMonth(user, month = viewMonth) {
   return Number(income.salary || 0) + Number(income.other || 0);
 }
 function actualMonthlyOutgoingsForMonth(user, month = viewMonth) {
-  return cashExpenseTotal(user, month) + creditCardPaymentDue(user, month) + fixedExpenseTotal(user, month);
+  return cashExpenseTotal(user, month) + creditCardPaymentDue(user, month) + fixedCashExpenseTotal(user, month);
 }
 function cashValueForMonth(user, month = viewMonth, visited = new Set()) {
   const state = cashState(user, month);
@@ -982,8 +987,10 @@ function renderDashboard() {
   const cardExpenses = creditCardSpendTotal(user, viewMonth);
   const cardPaymentDue = creditCardPaymentDue(user, viewMonth);
   const cardPaymentSettings = creditCardPaymentState(user, viewMonth);
-  const actualMonthlyOutgoings = fixedExpenses + cashExpenses + cardPaymentDue;
+  const fixedCashExpenses = fixedCashExpenseTotal(user, viewMonth);
+  const actualMonthlyOutgoings = fixedCashExpenses + cashExpenses + cardPaymentDue;
   const monthlyBalance = thisMonthIncomeTotal - actualMonthlyOutgoings;
+  const savingsRate = thisMonthIncomeTotal > 0 ? (monthlyBalance / thisMonthIncomeTotal) * 100 : null;
   const endingCash = endingCashForMonth(user, viewMonth);
   const comparison = monthlyChange(user, total, viewMonth);
   const chartHistory = user.history.filter(item => item.month <= todayMonth());
@@ -1019,7 +1026,7 @@ function renderDashboard() {
           <div class="section-heading"><div><h2>本月開銷</h2><p>${dailySummary ? `${monthText(viewMonth)} · 快速每日記帳同步` : `${monthText(viewMonth)} · 現金 NT$ ${money(cashExpenses)} · 本月刷卡 NT$ ${money(cardExpenses)}`}</p></div><button class="text-button" id="add-monthly-expense-button">${dailySummary ? '手動備援' : '＋ 記一筆'}</button></div>
           <section class="expense-card" id="monthly-expenses">${dailySummary ? renderSyncedMonthlyExpenses(cashExpenses, cardExpenses) : renderMonthlyExpenses(thisMonthExpenses)}</section>
           <button class="card-payment-card" id="card-payment-button" type="button"><div><span>本月信用卡應繳</span><small>${dailySummary?.cardPaymentReady ? '快速每日記帳同步' : `${cardPaymentSettings.mode === 'manual' ? '自行填寫' : `沿用${monthText(previousMonth(viewMonth))}信用卡開銷`} · 手動備援`} · 點選設定</small></div><strong>NT$ ${money(cardPaymentDue)}</strong></button>
-          <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定開銷 NT$ ${money(fixedExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div></section>
+          <section class="monthly-balance-card ${monthlyBalance >= 0 ? 'positive' : 'negative'}"><div class="balance-heading"><span>本月收支結餘</span><div class="balance-result"><strong>${monthlyBalance >= 0 ? '+' : '−'} NT$ ${money(Math.abs(monthlyBalance))}</strong>${savingsRate === null ? '' : `<small>儲蓄率 ${savingsRate.toFixed(1)}%</small>`}</div></div><div class="balance-formula"><span>收入 NT$ ${money(thisMonthIncomeTotal)}</span><span>－ 總開銷 NT$ ${money(actualMonthlyOutgoings)}</span></div><div class="balance-breakdown"><span>固定現金開銷 NT$ ${money(fixedCashExpenses)}</span><span>現金開銷 NT$ ${money(cashExpenses)}</span><span>信用卡應繳 NT$ ${money(cardPaymentDue)}</span></div></section>
         </section>
       </div>
     </main>
@@ -2582,7 +2589,7 @@ function openAccountModal() {
 }
 
 if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  navigator.serviceWorker.register('./sw.js?v=65').then(registration => registration.update());
+  navigator.serviceWorker.register('./sw.js?v=66').then(registration => registration.update());
 });
 
 document.addEventListener('visibilitychange', async () => {

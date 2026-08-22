@@ -37,6 +37,8 @@ const current = sync.summarize({
 });
 assert.equal(current.incomeTotal, 143000);
 assert.equal(current.fixedExpenseTotal, 9000);
+assert.equal(current.fixedCashExpenseTotal, 9000);
+assert.equal(current.fixedCreditCardExpenseTotal, 0);
 assert.equal(current.cashExpenseTotal, 6000);
 assert.equal(current.creditCardExpenseTotal, 6000);
 assert.equal(current.cardPaymentDue, 6300);
@@ -54,6 +56,7 @@ const currentLegacyFixed = sync.summarize({
   fixedRules: [],
 });
 assert.equal(currentLegacyFixed.fixedExpenseTotal, 8420);
+assert.equal(currentLegacyFixed.fixedCashExpenseTotal, 8420);
 
 const historical = sync.summarize({
   current: false,
